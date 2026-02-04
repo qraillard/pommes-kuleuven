@@ -524,6 +524,22 @@ storage_main_resource:
   - area
   - storage_tech
   type: str
+
+storage_discharge_ramp:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_op
+  type: float64
+storage_charge_ramp:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_op
+  type: float64
+
 storage_energy_capacity_investment_max:
   default: nan
   index_set:

@@ -376,7 +376,7 @@ def add_process(
 
     m.add_constraints(
         operation_process_power_capacity >= p.process_power_capacity_min,
-        name="operation_conversion_power_capacity_min_constraint",
+        name="operation_process_power_capacity_min_constraint",
         mask=np.isfinite(p.process_power_capacity_min),
     )
 

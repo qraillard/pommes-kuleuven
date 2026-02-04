@@ -81,6 +81,7 @@ def add_storage(
                 Limits the maximum charging power based on capacity.
             - ``operation_storage_power_out_max_constraint``
                 Limits the maximum discharging power based on capacity.
+            - Ramp-up and ramp-down constraints for smooth power output changes.
             - ``operation_storage_level_max_constraint``
                 Ensures storage level does not exceed its maximum capacity.
 
@@ -248,6 +249,30 @@ def add_storage(
     m.add_constraints(
         operation_storage_level - operation_storage_energy_capacity <= 0,
         name="operation_storage_level_max_constraint",
+    )
+
+    m.add_constraints(
+        -p.storage_charge_ramp * operation_storage_power_capacity
+        + (
+                operation_storage_power_in
+                - operation_storage_power_in.shift(hour=1)
+        )
+        / p.time_step_duration
+        <= 0,
+        name="operation_storage_charge_ramp_constraint",
+        mask=np.isfinite(p.storage_charge_ramp) * (p.hour != p.hour[0]),
+    )
+
+    m.add_constraints(
+        -p.storage_discharge_ramp * operation_storage_power_capacity
+        + (
+                operation_storage_power_out
+                - operation_storage_power_out.shift(hour=1)
+        )
+        / p.time_step_duration
+        <= 0,
+        name="operation_storage_discharge_ramp_constraint",
+        mask=np.isfinite(p.storage_discharge_ramp) * (p.hour != p.hour[0]),
     )
 
     # Operation - Storage intermediate variables
