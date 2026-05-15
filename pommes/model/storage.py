@@ -275,6 +275,8 @@ def add_storage(
         mask=np.isfinite(p.storage_discharge_ramp) * (p.hour != p.hour[0]),
     )
 
+    #TODO: storage_level ramping - do I apply a ramp based on the remaining volume level or on the volume capacity ? Do I allow for both ?
+
     # Operation - Storage intermediate variables
 
     m.add_constraints(

@@ -235,7 +235,7 @@ def add_process(
 
     planning_process_costs = m.add_variables(
         name="planning_process_costs",
-        coords=[p.area, p.process_tech, p.year_op],
+        coords=[p.area,p.process_tech, p.year_op],
     )
 
     # ------------------
@@ -348,19 +348,32 @@ def add_process(
     )
 
     m.add_constraints(operation_process_state - operation_process_nb_units <= 0,
-                      name="operation_process_state_nb_units", mask=np.isfinite(p.process_unit_size) * (p.process_unit_size > 0 ))
+                      name="operation_process_state_nb_units", mask=np.isfinite(p.process_unit_size) * (p.process_unit_size > 0 ) * (p.process_no_shutdown == False))
+
+    m.add_constraints(operation_process_state - operation_process_nb_units == 0,
+                      name="operation_process_no_shutdown_constraint",
+                      mask=np.isfinite(p.process_unit_size) * (p.process_unit_size > 0) * (p.process_no_shutdown == True))
+
+
+    m.add_constraints(operation_process_state - 1 == 0,
+                      name="operation_process_no_shutdown_constraint_no_unit_size",
+                      mask=np.isfinite(p.process_unit_size) * (p.process_unit_size == 0) * (p.process_no_shutdown == True))
 
     m.add_constraints(operation_process_startup - operation_process_nb_units <= 0,
-                      name="operation_process_startup_nb_units",
+                      name="operation_process_startup_nb_units_constraint",
                       mask=np.isfinite(p.process_unit_size) * (p.process_unit_size > 0))
 
     m.add_constraints(operation_process_shutdown - operation_process_state <= 0, #cannot stop more units than the ones already on
-                      name="operation_process_shutdown_nb_units",
+                      name="operation_process_shutdown_nb_units_constraint",
                       mask=np.isfinite(p.process_unit_size) * (p.process_unit_size > 0))
 
     m.add_constraints(operation_process_nb_units <= 1, #if no process unit size specified, only 1 unit can be installed
-                      name="operation_process_nb_units_max_if_no_unit_size",
+                      name="operation_process_nb_units_max_if_no_unit_size_constraint",
                       mask=np.isfinite(p.process_unit_size)* (p.process_unit_size <=0))
+
+    m.add_constraints(operation_process_power==0, #if process_factor not defined for a given mode, then the technology cannot operate under this mode
+                      name="operation_process_power_undefined_mode",
+                      mask=(p.process_factor == 0).all(dim="resource"))
 
     # Operation capacity
     m.add_constraints(

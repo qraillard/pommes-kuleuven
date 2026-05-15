@@ -974,6 +974,14 @@ process_ramp_up:
   - year_op
   type: float64
 
+process_no_shutdown:
+  default: 0
+  index_set:
+  - area
+  - process_tech
+  - year_op
+  type: bool
+
 process_variable_cost:
   default: 0
   index_set:
