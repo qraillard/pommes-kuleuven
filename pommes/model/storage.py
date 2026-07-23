@@ -94,6 +94,11 @@ def add_storage(
                 Enforces a lower limit on planned storage energy investments.
             - ``planning_storage_energy_capacity_max_constraint``
                 Enforces an upper limit on planned storage energy investments.
+            - ``planning_storage_energy_power_ratio_constraint``
+                Ties planned energy capacity to planned power capacity by a
+                fixed ratio (``storage_energy_power_ratio``, e.g. 4 for a 4h
+                battery), only where that ratio is configured (not NaN) --
+                otherwise power and energy capacities evolve independently.
 
         - *Costs*
             - ``operation_storage_costs_def``
@@ -379,6 +384,20 @@ def add_storage(
             p.storage_energy_capacity_investment_min,
             p.storage_energy_capacity_investment_max,
         ),
+    )
+
+    # Ties energy capacity to power capacity by a fixed ratio (e.g. 4 for
+    # a 4h battery: 1 MW power -> 4 MWh energy), only where configured --
+    # power and energy are otherwise free to evolve independently.
+    # storage_energy_power_ratio has no year_inv dimension, so this holds
+    # per investment vintage and (being linear) automatically also holds
+    # at the operation level once summed by operation_storage_*_capacity_def.
+    m.add_constraints(
+        planning_storage_energy_capacity
+        - p.storage_energy_power_ratio * planning_storage_power_capacity
+        == 0,
+        name="planning_storage_energy_power_ratio_constraint",
+        mask=np.isfinite(p.storage_energy_power_ratio),
     )
 
     # Costs - Storage

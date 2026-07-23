@@ -114,7 +114,37 @@ combined_must_run:
   - year_op
   type: float64
 
+combined_power_capacity_max:
+  default: nan
+  index_set:
+  - area
+  - combined_tech
+  - year_op
+  type: float64
 
+combined_power_capacity_min:
+  default: nan
+  index_set:
+  - area
+  - combined_tech
+  - year_op
+  type: float64
+
+combined_max_load:
+  default: 1.0
+  index_set:
+  - area
+  - combined_tech
+  - year_op
+  type: float64
+
+combined_min_load:
+  default: 0.0
+  index_set:
+  - area
+  - combined_tech
+  - year_op
+  type: float64
 
 combined_ramp_down:
   default: nan
@@ -129,6 +159,7 @@ combined_ramp_up:
   index_set:
   - area
   - combined_tech
+  - mode
   - year_op
   type: float64
 

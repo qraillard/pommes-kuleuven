@@ -1,0 +1,40 @@
+name: pommes-dev
+channels:
+  - conda-forge
+  - fico-xpress
+dependencies:
+  - python=3.13
+  - numpy
+  - pandas
+  - xarray
+  - linopy=0.7.*  # linopy>=0.8 changed how add_variables(coords=[...]) validates
+                  # its coords argument and no longer accepts the xarray
+                  # DataArray-per-dim pattern used throughout this codebase --
+                  # pin below that until the codebase is updated for it.
+  - pyyaml
+  - highspy
+  - h5netcdf
+  - cftime
+  - psutil
+  - notebook
+  - ipykernel
+  - ipython
+  - nbformat
+  - matplotlib
+  - pandoc
+  - pre-commit
+  - ruff
+  - pytest
+  - coverage
+  - sphinx
+  - nbsphinx
+  - sphinx-autoapi
+  - sphinx-rtd-theme
+  - pip
+  - pip:
+      - gurobipy
+      - xpress
+      - Mosek
+      - geopandas
+      - plotly
+      - seaborn

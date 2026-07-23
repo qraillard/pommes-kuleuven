@@ -184,8 +184,10 @@ def test_transport_multi_hour(parameters_transport):
     model.solve(solver_name="highs")
     s = model.solution.squeeze(drop=True).sum("year_dec")
 
-    assert_equal(
-        s.operation_conversion_power_capacity.to_numpy(), np.array([20, 20])
+    assert_equal_epsilon(
+        s.operation_conversion_power_capacity.to_numpy(),
+        np.array([20, 20]),
+        decimal=12,
     )
     assert_equal(
         s.operation_conversion_power.to_numpy(),

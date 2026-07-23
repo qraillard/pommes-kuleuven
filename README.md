@@ -31,11 +31,11 @@ To integrate conda in PowerShell, run in the `Anaconda Prompt`:
 ### Python environment creation
 Ensure Conda is initiated in your shell: see [prerequisites](#prerequisites) if needed.
 
-Download the file
-[`environment.yaml`](https://git.persee.minesparis.psl.eu/energy-alternatives/pommes/-/blob/2e4613d9a7aa3f64485d59b683174a9a9ebb3da7/ci/envs/environment-all.yaml).
+Use the [`ci/envs/environment.yaml`](ci/envs/environment.yaml) file from this
+repository.
 
-To create the environment, run in the file directory:
+To create the environment, run from the repository root:
 
 ```bash
-$ conda env create -f environment-all.yaml
+$ conda env create -f ci/envs/environment.yaml
 ```

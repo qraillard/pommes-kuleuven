@@ -331,7 +331,7 @@ def add_conversion(
         if hr + p.operation_day_duration.values<p.hour.values.max():
             hour_range_list.append(list(range(hr, hr + p.operation_day_duration.values)))
         else:
-            hour_range_list.append(list(range(hr, p.hour.values.max())))
+            hour_range_list.append(list(range(hr, p.hour.values.max() + 1)))
     for hr_range in hour_range_list:
         m.add_constraints(
             +operation_year_normalization

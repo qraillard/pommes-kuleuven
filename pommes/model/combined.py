@@ -18,12 +18,19 @@ def add_combined(
 
     Including variables, costs, and constraints.
 
+    This module mirrors the structure of the process module (see
+    :func:`pommes.model.process.add_process`), covering load-band,
+    ramping, and capacity-bound constraints, but purposefully excludes
+    unit commitment: there are no integer/boolean variables (no on/off
+    state, startup/shutdown, or number-of-units variables), so combined
+    technologies are always dispatched continuously.
+
     Args:
         model (linopy.Model):
             The Linopy model to which combined-related elements will be added.
         model_parameters (xarray.Dataset):
             Dataset containing energy system parameters, including combined
-            technology details, availability, ramping rates, and production
+            technology details, load bounds, ramping rates, and production
             limits.
         annualised_totex_def (linopy.Constraint):
             Expression representing the annualised total expenditure (totex),
@@ -53,7 +60,9 @@ def add_combined(
           investments for each combined technology.
 
         Constraints:
-        - Power output limits adjusted for availability.
+        - Power output limits between a minimum and maximum load factor of
+          the installed capacity (no on/off commitment).
+        - Ramp-up and ramp-down constraints based on installed capacity.
         - Planning and operational capacity constraints.
         - Net generation definitions ensuring proper accounting.
         - Cost constraints considering fixed and variable costs.
@@ -94,10 +103,28 @@ def add_combined(
 
         - *Operation*
             - ``operation_combined_power_max_constraint``
-                Limits operational power to the available power capacity
-                adjusted by availability factors.
+                Limits operational power to the installed power capacity
+                scaled by ``combined_max_load``.
+            - ``operation_combined_power_min_constraint``
+                Enforces operational power to stay above the installed power
+                capacity scaled by ``combined_min_load``.
+            - ``operation_combined_power_undefined_mode``
+                Forces power to zero for modes that are not defined (i.e.
+                ``combined_factor`` is zero for every resource in that mode).
+            - ``operation_combined_ramp_up_constraint``
+                Constrains the ramp-up rate of combined technologies, based
+                on the installed power capacity.
+            - ``operation_combined_ramp_down_constraint``
+                Constrains the ramp-down rate of combined technologies, based
+                on the installed power capacity.
 
             - *Operational capacity*
+                - ``operation_combined_power_capacity_max_constraint``
+                    Sets an upper limit on the operation power capacity for
+                    each combined technology.
+                - ``operation_combined_power_capacity_min_constraint``
+                    Sets a lower limit on the operation power capacity for
+                    each combined technology.
                 - ``operation_combined_power_capacity_def``
                     Defines the operational power capacity based on the
                     planned investments over the years.
@@ -127,9 +154,10 @@ def add_combined(
                 over operational periods, with optional perfect foresight.
 
         These additions ensure that the combined technologies operate within
-        feasible and efficient limits, respecting capacity constraints, ramping
-        capabilities, and power output limits. The model is thereby enhanced
-        to accurately simulate combined energy behavior and costs.
+        feasible and efficient limits, respecting load-band, ramping
+        capabilities, and power capacity limits, without resorting to
+        integer or boolean unit-commitment variables. The model is thereby
+        enhanced to accurately simulate combined energy behavior and costs.
     """
     m = model
     p = model_parameters
@@ -214,10 +242,26 @@ def add_combined(
 
     m.add_constraints(
         operation_combined_power.sum("mode")
-        - operation_combined_power_capacity
+        - operation_combined_power_capacity * p.combined_max_load
         <= 0,
         name="operation_combined_power_max_constraint",
     )
+
+    m.add_constraints(
+        operation_combined_power.sum("mode")
+        - operation_combined_power_capacity * p.combined_min_load
+        >= 0,
+        name="operation_combined_power_min_constraint",
+    )
+
+    m.add_constraints(
+        operation_combined_power == 0,
+        # if combined_factor is not defined for a given mode, then the
+        # technology cannot operate under this mode
+        name="operation_combined_power_undefined_mode",
+        mask=(p.combined_factor == 0).all(dim="resource"),
+    )
+
     # TODO: must run in combined
     # m.add_constraints(
     #     operation_combined_power - operation_combined_power_capacity * p.combined_must_run
@@ -232,28 +276,49 @@ def add_combined(
     #     mask=(0 < p.combined_must_run) * (p.combined_must_run < 1),
     # )
 
-    # Operation - Combined unit commitment
+    # Operation - Combined ramping (no unit commitment: bounds are expressed
+    # directly against installed capacity, as there is no on/off state)
 
-    # TODO: ramps in combined
-    # m.add_constraints(
-    #     -p.combined_ramp_up * m.variables.operation_combined_power_capacity * time_step
-    #     + operation_combined_power
-    #     - operation_combined_power.shift(hour=1)
-    #     <= 0,
-    #     name="operation_combined_ramp_up_constraint",
-    #     mask=np.isfinite(p.combined_ramp_up) * (p.hour != p.hour[0]),
-    # )
-    #
-    # m.add_constraints(
-    #     -p.combined_ramp_down * m.variables.operation_combined_power_capacity * time_step
-    #     + operation_combined_power.shift(hour=1)
-    #     - operation_combined_power
-    #     <= 0,
-    #     name="operation_combined_ramp_down_constraint",
-    #     mask=np.isfinite(p.combined_ramp_down) * (p.hour != p.hour[0]),
-    # )
-    #
-    # # TODO: Ramp constraints fo lag > 1 not implemented yet and for storage also
+    m.add_constraints(
+        (
+            operation_combined_power
+            - operation_combined_power.shift(hour=1)
+        )
+        / p.time_step_duration
+        - p.combined_ramp_up * operation_combined_power_capacity
+        <= 0,
+        name="operation_combined_ramp_up_constraint",
+        mask=np.isfinite(p.combined_ramp_up) * (p.hour != p.hour[0]),
+    )
+
+    m.add_constraints(
+        (
+            operation_combined_power.shift(hour=1)
+            - operation_combined_power
+        )
+        / p.time_step_duration
+        - p.combined_ramp_down * operation_combined_power_capacity
+        <= 0,
+        name="operation_combined_ramp_down_constraint",
+        mask=np.isfinite(p.combined_ramp_down) * (p.hour != p.hour[0]),
+    )
+
+    # TODO: Ramp constraints for lag > 1 not implemented yet and for storage
+    #     also
+
+    # Operation capacity
+
+    m.add_constraints(
+        operation_combined_power_capacity <= p.combined_power_capacity_max,
+        name="operation_combined_power_capacity_max_constraint",
+        mask=np.isfinite(p.combined_power_capacity_max),
+    )
+
+    m.add_constraints(
+        operation_combined_power_capacity >= p.combined_power_capacity_min,
+        name="operation_combined_power_capacity_min_constraint",
+        mask=np.isfinite(p.combined_power_capacity_min),
+    )
 
     # Operation - Combined intermediate variables
 

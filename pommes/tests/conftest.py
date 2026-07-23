@@ -35,6 +35,7 @@ def coords() -> Dataset:
             hour_type=np.array(["HCE", "HPE", "HCH", "HPH", "P"], dtype=str),
             link=np.array(["link_1", "link_2"], dtype=str),
             mode=np.array(["electric", "fossil"], dtype=str),
+            process_tech=np.array(["chp"], dtype=str),
             resource=np.array(
                 ["electricity", "heat", "hydrogen", "methane"], dtype=str
             ),
@@ -72,6 +73,7 @@ def time_slice(coords):
                     dtype="float64",
                 ),
             ),
+            operation_day_duration=np.array(24, dtype="int64"),
         ),
         coords=dict(hour=coords.hour, year_op=coords.year_op),
     )
@@ -155,6 +157,10 @@ def combined(coords):
             ),
             combined_ramp_up=np.array(np.nan, dtype="float64"),
             combined_ramp_down=np.array(np.nan, dtype="float64"),
+            combined_max_load=np.array(1.0, dtype="float64"),
+            combined_min_load=np.array(0.0, dtype="float64"),
+            combined_power_capacity_max=np.array(np.nan, dtype="float64"),
+            combined_power_capacity_min=np.array(np.nan, dtype="float64"),
             combined_finance_rate=np.array(0, dtype="float64"),
             combined_power_capacity_investment_max=np.array(
                 np.nan, dtype="float64"
@@ -179,6 +185,66 @@ def combined(coords):
             coords=[coords.year_dec, coords.year_inv],
         ),
         combined_end_of_life=ds.combined_life_span + coords.year_inv,
+    )
+    return ds
+
+
+@pytest.fixture(scope="module")
+def process(coords):
+    ds = xr.Dataset(
+        data_vars=dict(
+            process=np.array(True, dtype="bool"),
+            process_early_decommissioning=np.array(False, dtype="bool"),
+            process_annuity_perfect_foresight=np.array(False, dtype="bool"),
+            process_variable_cost=np.array(1, dtype="float64"),
+            process_fixed_cost=np.array(10, dtype="float64"),
+            process_invest_cost=np.array(2000, dtype="float64"),
+            process_life_span=np.array(20, dtype="float64"),
+            process_emission_factor=(
+                ["process_tech", "mode"],
+                np.array([[0, 10]], dtype="float64"),
+            ),
+            process_factor=(
+                ["process_tech", "mode", "resource"],
+                np.array(
+                    [[[-1, 1, 0, 0], [0, 1, 0, -1.5]]],
+                    dtype="float64",
+                ),
+            ),
+            process_max_load=np.array(1.0, dtype="float64"),
+            process_min_load=np.array(0.0, dtype="float64"),
+            process_unit_size=np.array(0, dtype="float64"),
+            process_startup_cost=np.array(0, dtype="float64"),
+            process_shutdown_cost=np.array(0, dtype="float64"),
+            process_minimum_startup_time=np.array(1, dtype="float64"),
+            process_minimum_shutdown_time=np.array(1, dtype="float64"),
+            process_no_shutdown=np.array(False, dtype="bool"),
+            process_ramp_up=np.array(np.nan, dtype="float64"),
+            process_ramp_down=np.array(np.nan, dtype="float64"),
+            process_power_capacity_max=np.array(1000, dtype="float64"),
+            process_power_capacity_min=np.array(0, dtype="float64"),
+            process_power_capacity_investment_max=np.array(
+                np.nan, dtype="float64"
+            ),
+            process_power_capacity_investment_min=np.array(
+                np.nan, dtype="float64"
+            ),
+        ),
+        coords=dict(
+            process_tech=coords.process_tech,
+            resource=coords.resource,
+            mode=coords.mode,
+        ),
+    )
+    ds = ds.assign(
+        process_annuity_cost=ds.process_invest_cost
+        * xr.DataArray(
+            square_array_by_diagonals(
+                6, {0: 1 / 20, 1: 1 / 10}, fill=np.nan, dtype="float64"
+            )[:, 1:],
+            coords=[coords.year_dec, coords.year_inv],
+        ),
+        process_end_of_life=ds.process_life_span + coords.year_inv,
     )
     return ds
 
@@ -243,6 +309,7 @@ def conversion(coords):
                 0, dtype="float64"
             ),
             conversion_max_yearly_production=np.array(np.nan, dtype="float64"),
+            conversion_max_daily_production=np.array(np.nan, dtype="float64"),
             conversion_power_capacity_max=np.array(1000, dtype="float64"),
             conversion_power_capacity_min=np.array(0, dtype="float64"),
         ),
@@ -285,6 +352,7 @@ def storage(coords):
             storage_power_capacity_investment_min=np.array(
                 np.nan, dtype="float64"
             ),
+            storage_energy_power_ratio=np.array(np.nan, dtype="float64"),
             storage_fixed_cost_energy=np.array(0, dtype="float64"),
             storage_fixed_cost_power=np.array(0, dtype="float64"),
             storage_invest_cost_energy=(
@@ -308,6 +376,8 @@ def storage(coords):
                 ["storage_tech"],
                 np.array([0, 0, 0], dtype="float64"),
             ),
+            storage_charge_ramp=np.array(np.nan, dtype="float64"),
+            storage_discharge_ramp=np.array(np.nan, dtype="float64"),
             storage_factor_in=(
                 ["storage_tech", "resource"],
                 np.array(
@@ -505,6 +575,11 @@ def transport(coords):
             transport_power_capacity_investment_min=np.array(
                 np.nan, dtype="float64"
             ),
+            transport_power_capacity_max=np.array(np.nan, dtype="float64"),
+            transport_power_capacity_min=np.array(np.nan, dtype="float64"),
+            transport_availability=np.array(np.nan, dtype="float64"),
+            transport_ramp_up=np.array(np.nan, dtype="float64"),
+            transport_ramp_down=np.array(np.nan, dtype="float64"),
             transport_hurdle_costs=np.array(0.01, dtype="float64"),
             transport_resource=(
                 ["transport_tech"],
