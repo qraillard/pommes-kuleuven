@@ -1,20 +1,9 @@
 [project]
 name = "pommes"
-version = "0.2.3" # will be set by the tag in gitlab CI
+version = "0.0.1+kul" # own versioning restarted 2026-07-24 (was inherited from July 2025 fork, static since)
 description = "Planning and Operation Model for Multi-Energy Systems"
 authors = [
-    { name = "Thibaut Knibiehly", email = "thibaut.knibiehly@minesparis.psl.eu" },
-    { name = "Hugo Hamburger", email = "yassine.abdelouadoud@gmail.com" },
-    { name = "Robin Girard", email = "robin.girard@minesparis.psl.eu" },
-    { name = "Yoann Chiche", email = "yoann.chiche@minesparis.psl.eu" },
-    { name = "Yassine Abdelouadoud", email = "yassine.abdelouadoud@minesparis.psl.eu" },
-]
-maintainers = [
-    { name = "Thibaut Knibiehly", email = "thibaut.knibiehly@minesparis.psl.eu" },
-    { name = "Hugo Hamburger", email = "yassine.abdelouadoud@gmail.com" },
-    { name = "Robin Girard", email = "robin.girard@minesparis.psl.eu" },
-    { name = "Yoann Chiche", email = "yoann.chiche@minesparis.psl.eu" },
-    { name = "Yassine Abdelouadoud", email = "yassine.abdelouadoud@minesparis.psl.eu" },
+    { name = "Quentin Raillard", email = "quentin.raillard--cazanove@kuleuven.be" }
 ]
 license = "MIT"
 readme = "README.md"
