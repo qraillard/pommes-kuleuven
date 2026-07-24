@@ -599,6 +599,12 @@ storage_power_capacity_investment_min:
   - storage_tech
   - year_inv
   type: float64
+storage_energy_power_ratio:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  type: float64
 time_step_duration:
   default: 1
   index_set:
