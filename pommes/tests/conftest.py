@@ -352,6 +352,10 @@ def storage(coords):
             storage_power_capacity_investment_min=np.array(
                 np.nan, dtype="float64"
             ),
+            storage_power_capacity_max=np.array(np.nan, dtype="float64"),
+            storage_power_capacity_min=np.array(np.nan, dtype="float64"),
+            storage_energy_capacity_max=np.array(np.nan, dtype="float64"),
+            storage_energy_capacity_min=np.array(np.nan, dtype="float64"),
             storage_energy_power_ratio=np.array(np.nan, dtype="float64"),
             storage_fixed_cost_energy=np.array(0, dtype="float64"),
             storage_fixed_cost_power=np.array(0, dtype="float64"),
@@ -484,6 +488,9 @@ def carbon(coords):
             carbon=np.array(True, dtype="bool"),
             carbon_tax=np.array(2, dtype="float64"),
             carbon_goal=np.array(14, dtype="float64"),
+            carbon_goal_area=np.array(np.nan, dtype="float64"),
+            carbon_goal_group_areas=np.array(False, dtype="bool"),
+            carbon_goal_group_max=np.array(np.nan, dtype="float64"),
         ),
         coords=dict(),
     )
@@ -580,6 +587,7 @@ def transport(coords):
             transport_availability=np.array(np.nan, dtype="float64"),
             transport_ramp_up=np.array(np.nan, dtype="float64"),
             transport_ramp_down=np.array(np.nan, dtype="float64"),
+            transport_linepack_capacity=np.array(np.nan, dtype="float64"),
             transport_hurdle_costs=np.array(0.01, dtype="float64"),
             transport_resource=(
                 ["transport_tech"],

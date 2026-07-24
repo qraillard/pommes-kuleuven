@@ -51,6 +51,18 @@ def add_transport(
             - ``operation_transport_net_generation``
                 Represents the net energy transferred between areas, accounting
                 for inflows and outflows.
+            - ``operation_transport_power_in``
+                Represents the power injected into the link at its
+                ``transport_area_from`` end. Equal to
+                ``operation_transport_power`` (the flow withdrawn at
+                ``transport_area_to``) unless ``transport_linepack_capacity``
+                is configured for that link/tech, in which case the two may
+                differ while the linepack buffer charges/discharges.
+            - ``operation_transport_linepack_level``
+                Represents the pipe's own gas/volume buffer level, acting as
+                a store that decouples the injected and withdrawn flows.
+                Only meaningful where ``transport_linepack_capacity`` is
+                configured (not NaN).
             - ``operation_transport_costs``
                 Represents operational costs associated with transport
                 technologies for each area and operational year.
@@ -67,6 +79,19 @@ def add_transport(
         - *Operation*
             - ``operation_transport_power_max_constraint``
                 Limits operational power flow to available capacity.
+            - ``operation_transport_power_in_def``
+                Forces ``operation_transport_power_in`` to equal
+                ``operation_transport_power`` where linepack isn't
+                configured, so behaviour matches the unbuffered model.
+            - ``operation_transport_linepack_level_def``
+                Defines the linepack buffer level's evolution (cyclic over
+                the year) from the difference between injected and
+                withdrawn flow, where configured.
+            - ``operation_transport_linepack_level_max_constraint``
+                Bounds the linepack level by ``transport_linepack_capacity``.
+            - ``operation_transport_power_in_max_constraint``
+                Bounds ``operation_transport_power_in`` by the same
+                capacity/availability envelope as the outflow.
             - ``operation_transport_net_generation_def``
                 Defines net energy flow for transport between different areas.
 
@@ -107,6 +132,26 @@ def add_transport(
         name="operation_transport_power",
         lower=0,
         coords=[p.link, p.transport_tech, p.hour, p.year_op],
+    )
+
+    # Power injected into the link at its transport_area_from end. Equal to
+    # operation_transport_power (the flow withdrawn at transport_area_to)
+    # unless transport_linepack_capacity is configured, in which case the
+    # pipe's own gas/volume buffer can absorb the difference -- see
+    # operation_transport_power_in_def and operation_transport_linepack_level_def.
+    operation_transport_power_in = m.add_variables(
+        name="operation_transport_power_in",
+        lower=0,
+        coords=[p.link, p.transport_tech, p.hour, p.year_op],
+    )
+
+    # Linepack buffer level (only meaningful where transport_linepack_capacity
+    # is configured; see operation_transport_linepack_level_def).
+    operation_transport_linepack_level = m.add_variables(
+        name="operation_transport_linepack_level",
+        lower=0,
+        coords=[p.link, p.transport_tech, p.hour, p.year_op],
+        mask=np.isfinite(p.transport_linepack_capacity),
     )
 
     # Operation - transport intermediate variables
@@ -190,6 +235,50 @@ def add_transport(
         name="operation_transport_power_max_constraint"
     )
 
+    # Operation - transport linepack
+
+    # Where linepack isn't configured, force power_in to equal the
+    # existing (single) transport flow, so behaviour is identical to a
+    # link without a buffer.
+    m.add_constraints(
+        operation_transport_power_in - operation_transport_power == 0,
+        name="operation_transport_power_in_def",
+        mask=~np.isfinite(p.transport_linepack_capacity),
+    )
+
+    # Where configured, the pipe's own gas/volume buffer absorbs the
+    # difference between what's injected (power_in) and what's withdrawn
+    # (operation_transport_power) -- cyclic over the year, like storage's
+    # own level definition.
+    m.add_constraints(
+        -operation_transport_linepack_level
+        + operation_transport_linepack_level.roll(hour=1)
+        + (operation_transport_power_in - operation_transport_power)
+        * p.time_step_duration
+        == 0,
+        name="operation_transport_linepack_level_def",
+        mask=np.isfinite(p.transport_linepack_capacity),
+    )
+
+    m.add_constraints(
+        operation_transport_linepack_level <= p.transport_linepack_capacity,
+        name="operation_transport_linepack_level_max_constraint",
+        mask=np.isfinite(p.transport_linepack_capacity),
+    )
+
+    m.add_constraints(
+        operation_transport_power_in
+        - operation_transport_power_capacity
+        * xr.where(
+            cond=np.isfinite(p.transport_availability),
+            x=p.transport_availability,
+            y=1,
+        )
+        <= 0,
+        name="operation_transport_power_in_max_constraint",
+        mask=np.isfinite(p.transport_linepack_capacity),
+    )
+
     # Operation - Transport unit commitment
 
     m.add_constraints(
@@ -234,7 +323,12 @@ def add_transport(
             operation_transport_power.where(p.area == p.transport_area_to).sum(
                 "link"
             )
-            - operation_transport_power.where(
+            # Uses power_in (what's actually injected at the "from" end)
+            # rather than operation_transport_power (what's withdrawn at
+            # "to") -- identical to it unless linepack is configured, in
+            # which case the two legitimately differ while the buffer
+            # charges/discharges.
+            - operation_transport_power_in.where(
                 p.area == p.transport_area_from
             ).sum("link")
         ).where(

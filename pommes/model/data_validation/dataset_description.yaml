@@ -3,6 +3,24 @@ carbon_goal:
   index_set:
   - year_op
   type: float64
+carbon_goal_area:
+  default: nan
+  index_set:
+  - area
+  - year_op
+  type: float64
+carbon_goal_group_areas:
+  default: 0
+  index_set:
+  - area
+  - carbon_goal_group
+  type: bool
+carbon_goal_group_max:
+  default: nan
+  index_set:
+  - carbon_goal_group
+  - year_op
+  type: float64
 carbon:
   default: 0
   index_set: []
@@ -571,6 +589,38 @@ storage_charge_ramp:
   - year_op
   type: float64
 
+storage_energy_capacity_max:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_op
+  type: float64
+
+storage_energy_capacity_min:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_op
+  type: float64
+
+storage_power_capacity_max:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_op
+  type: float64
+
+storage_power_capacity_min:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_op
+  type: float64
+
 storage_energy_capacity_investment_max:
   default: nan
   index_set:
@@ -706,6 +756,14 @@ transport_power_capacity_investment_min:
   type: float64
 
 transport_power_capacity_max:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - year_op
+  type: float64
+
+transport_linepack_capacity:
   default: nan
   index_set:
   - link

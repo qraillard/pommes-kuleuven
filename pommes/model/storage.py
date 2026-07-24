@@ -84,6 +84,15 @@ def add_storage(
             - Ramp-up and ramp-down constraints for smooth power output changes.
             - ``operation_storage_level_max_constraint``
                 Ensures storage level does not exceed its maximum capacity.
+            - ``operation_storage_power_capacity_max_constraint`` /
+              ``operation_storage_power_capacity_min_constraint``
+                Bounds the operational power capacity per operational year
+                (``storage_power_capacity_max/min``), in addition to the
+                year_inv-indexed investment bounds below.
+            - ``operation_storage_energy_capacity_max_constraint`` /
+              ``operation_storage_energy_capacity_min_constraint``
+                Bounds the operational energy capacity per operational year
+                (``storage_energy_capacity_max/min``).
 
         - *Planning*
             - ``planning_storage_power_capacity_min_constraint``
@@ -281,6 +290,34 @@ def add_storage(
     )
 
     #TODO: storage_level ramping - do I apply a ramp based on the remaining volume level or on the volume capacity ? Do I allow for both ?
+
+    # Operation - Storage operational capacity bounds (year_op-indexed, in
+    # addition to the year_inv-indexed investment bounds below -- mirrors
+    # conversion's operation_conversion_power_capacity_max/min_constraint).
+
+    m.add_constraints(
+        operation_storage_power_capacity <= p.storage_power_capacity_max,
+        name="operation_storage_power_capacity_max_constraint",
+        mask=np.isfinite(p.storage_power_capacity_max),
+    )
+
+    m.add_constraints(
+        operation_storage_power_capacity >= p.storage_power_capacity_min,
+        name="operation_storage_power_capacity_min_constraint",
+        mask=np.isfinite(p.storage_power_capacity_min),
+    )
+
+    m.add_constraints(
+        operation_storage_energy_capacity <= p.storage_energy_capacity_max,
+        name="operation_storage_energy_capacity_max_constraint",
+        mask=np.isfinite(p.storage_energy_capacity_max),
+    )
+
+    m.add_constraints(
+        operation_storage_energy_capacity >= p.storage_energy_capacity_min,
+        name="operation_storage_energy_capacity_min_constraint",
+        mask=np.isfinite(p.storage_energy_capacity_min),
+    )
 
     # Operation - Storage intermediate variables
 
