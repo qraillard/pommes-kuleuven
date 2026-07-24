@@ -34,6 +34,7 @@ def add_flexdem(
         name="operation_flexdem_demand",
         lower=0,
         coords=[p.area, p.resource, p.hour, p.year_op],
+        mask=(flexdem_demand != 0).any("hour"),
     )
 
     # --------------
@@ -47,10 +48,12 @@ def add_flexdem(
     # Ratio constraints
 
     m.add_constraints(operation_flexdem_demand -p.flexdem_demand*p.flexdem_maxload_ratio <=0,
-                      name="operation_flexdem_demand_max")
+                      name="operation_flexdem_demand_max",
+                      mask=np.isfinite(p.flexdem_maxload_ratio))
 
     m.add_constraints(operation_flexdem_demand - p.flexdem_demand * p.flexdem_minload_ratio >= 0,
-                      name="operation_flexdem_demand_min")
+                      name="operation_flexdem_demand_min",
+                      mask=p.flexdem_minload_ratio > 0)
 
     # Conservation constraint
     m.add_constraints(operation_flexdem_demand.sum("hour") - flexdem_demand.sum("hour") == 0,
