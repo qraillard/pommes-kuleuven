@@ -1,5 +1,7 @@
 """Module to write in model process related constraints."""
 
+import itertools
+
 import numpy as np
 import xarray as xr
 from linopy import Constraint, Model
@@ -304,48 +306,106 @@ def add_process(
     )
 
     # Operation - process unit commitment
+    # Ramp applies to the total across modes, not each mode independently
+    # (else a 2-mode tech's aggregate output could ramp ~2x too fast).
+
+    process_ramp_up = p.process_ramp_up.min(
+        [dim for dim in ["mode"] if dim in p.process_ramp_up.dims]
+    )
+    process_ramp_down = p.process_ramp_down.min(
+        [dim for dim in ["mode"] if dim in p.process_ramp_down.dims]
+    )
 
     m.add_constraints(
 
-        (operation_process_power
-        - operation_process_power.shift(hour=1))/p.time_step_duration
-        - p.process_ramp_up * p.process_unit_size * operation_process_state
+        (operation_process_power.sum("mode")
+        - operation_process_power.sum("mode").shift(hour=1))/p.time_step_duration
+        - process_ramp_up * p.process_unit_size * operation_process_state
         <= 0,
         name="operation_process_ramp_up_constraint",
-        mask=np.isfinite(p.process_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size)* (p.process_unit_size > 0),
+        mask=np.isfinite(process_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size)* (p.process_unit_size > 0),
     )
 
     m.add_constraints(
 
-        (operation_process_power
-         - operation_process_power.shift(hour=1)) / p.time_step_duration
-        -p.process_ramp_up * operation_process_power_capacity
+        (operation_process_power.sum("mode")
+         - operation_process_power.sum("mode").shift(hour=1)) / p.time_step_duration
+        -process_ramp_up * operation_process_power_capacity
         <= 0,
         name="operation_process_ramp_up_constraint_no_unit_size",
-        mask=np.isfinite(p.process_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (
+        mask=np.isfinite(process_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (
                     p.process_unit_size <= 0),
     )
 
     m.add_constraints(
 
-        (operation_process_power.shift(hour=1)
-        - operation_process_power)/p.time_step_duration
-        - p.process_ramp_down * p.process_unit_size * operation_process_state
+        (operation_process_power.sum("mode").shift(hour=1)
+        - operation_process_power.sum("mode"))/p.time_step_duration
+        - process_ramp_down * p.process_unit_size * operation_process_state
         <= 0,
         name="operation_process_ramp_down_constraint",
-        mask=np.isfinite(p.process_ramp_down) * (p.hour != p.hour[0])* np.isfinite(p.process_unit_size)* (p.process_unit_size > 0),
+        mask=np.isfinite(process_ramp_down) * (p.hour != p.hour[0])* np.isfinite(p.process_unit_size)* (p.process_unit_size > 0),
     )
 
     m.add_constraints(
 
-        (operation_process_power.shift(hour=1)
-         - operation_process_power) / p.time_step_duration
-        - p.process_ramp_down * operation_process_power_capacity
+        (operation_process_power.sum("mode").shift(hour=1)
+         - operation_process_power.sum("mode")) / p.time_step_duration
+        - process_ramp_down * operation_process_power_capacity
         <= 0,
         name="operation_process_ramp_down_constraint_no_unit_size",
-        mask=np.isfinite(p.process_ramp_down) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (
+        mask=np.isfinite(process_ramp_down) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (
                     p.process_unit_size <= 0),
     )
+
+    # Optional, opt-in: limits how fast the split between modes shifts,
+    # independent of the aggregate ramp above. Off by default (nan). Applied
+    # pairwise across all modes -- no new variable: power(mode_a) -
+    # power(mode_b) is a linear combination of the existing power variable.
+
+    process_mode_ramp_up = p.process_mode_ramp_up.min(
+        [dim for dim in ["mode"] if dim in p.process_mode_ramp_up.dims]
+    )
+    process_mode_ramp_down = p.process_mode_ramp_down.min(
+        [dim for dim in ["mode"] if dim in p.process_mode_ramp_down.dims]
+    )
+
+    for mode_a, mode_b in itertools.combinations(p.mode.values, 2):
+        process_mode_balance = operation_process_power.sel(
+            mode=mode_a
+        ) - operation_process_power.sel(mode=mode_b)
+
+        m.add_constraints(
+            (process_mode_balance - process_mode_balance.shift(hour=1)) / p.time_step_duration
+            - process_mode_ramp_up * p.process_unit_size * operation_process_state
+            <= 0,
+            name=f"operation_process_mode_ramp_up_constraint_{mode_a}_{mode_b}",
+            mask=np.isfinite(process_mode_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size > 0),
+        )
+
+        m.add_constraints(
+            (process_mode_balance - process_mode_balance.shift(hour=1)) / p.time_step_duration
+            - process_mode_ramp_up * operation_process_power_capacity
+            <= 0,
+            name=f"operation_process_mode_ramp_up_constraint_no_unit_size_{mode_a}_{mode_b}",
+            mask=np.isfinite(process_mode_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size <= 0),
+        )
+
+        m.add_constraints(
+            (process_mode_balance.shift(hour=1) - process_mode_balance) / p.time_step_duration
+            - process_mode_ramp_down * p.process_unit_size * operation_process_state
+            <= 0,
+            name=f"operation_process_mode_ramp_down_constraint_{mode_a}_{mode_b}",
+            mask=np.isfinite(process_mode_ramp_down) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size > 0),
+        )
+
+        m.add_constraints(
+            (process_mode_balance.shift(hour=1) - process_mode_balance) / p.time_step_duration
+            - process_mode_ramp_down * operation_process_power_capacity
+            <= 0,
+            name=f"operation_process_mode_ramp_down_constraint_no_unit_size_{mode_a}_{mode_b}",
+            mask=np.isfinite(process_mode_ramp_down) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size <= 0),
+        )
 
     m.add_constraints(operation_process_state - operation_process_nb_units <= 0,
                       name="operation_process_state_nb_units", mask=np.isfinite(p.process_unit_size) * (p.process_unit_size > 0 ) * (p.process_no_shutdown == False))

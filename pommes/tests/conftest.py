@@ -157,6 +157,8 @@ def combined(coords):
             ),
             combined_ramp_up=np.array(np.nan, dtype="float64"),
             combined_ramp_down=np.array(np.nan, dtype="float64"),
+            combined_mode_ramp_up=np.array(np.nan, dtype="float64"),
+            combined_mode_ramp_down=np.array(np.nan, dtype="float64"),
             combined_max_load=np.array(1.0, dtype="float64"),
             combined_min_load=np.array(0.0, dtype="float64"),
             combined_power_capacity_max=np.array(np.nan, dtype="float64"),
@@ -221,6 +223,8 @@ def process(coords):
             process_no_shutdown=np.array(False, dtype="bool"),
             process_ramp_up=np.array(np.nan, dtype="float64"),
             process_ramp_down=np.array(np.nan, dtype="float64"),
+            process_mode_ramp_up=np.array(np.nan, dtype="float64"),
+            process_mode_ramp_down=np.array(np.nan, dtype="float64"),
             process_power_capacity_max=np.array(1000, dtype="float64"),
             process_power_capacity_min=np.array(0, dtype="float64"),
             process_power_capacity_investment_max=np.array(

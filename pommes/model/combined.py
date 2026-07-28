@@ -1,5 +1,7 @@
 """Module to write in model combined related constraints."""
 
+import itertools
+
 import numpy as np
 import xarray as xr
 from linopy import Constraint, Model
@@ -112,11 +114,22 @@ def add_combined(
                 Forces power to zero for modes that are not defined (i.e.
                 ``combined_factor`` is zero for every resource in that mode).
             - ``operation_combined_ramp_up_constraint``
-                Constrains the ramp-up rate of combined technologies, based
-                on the installed power capacity.
+                Constrains the ramp-up rate of a combined technology's total
+                output (summed across mode), based on the installed power
+                capacity.
             - ``operation_combined_ramp_down_constraint``
-                Constrains the ramp-down rate of combined technologies, based
-                on the installed power capacity.
+                Constrains the ramp-down rate of a combined technology's total
+                output (summed across mode), based on the installed power
+                capacity.
+            - ``operation_combined_mode_ramp_up_constraint``
+                Optional, opt-in (``combined_mode_ramp_up``, default nan/off):
+                limits how fast the split between each pair of modes can
+                shift (a fuel/pathway-shift rate), independent of the
+                aggregate ramp above.
+            - ``operation_combined_mode_ramp_down_constraint``
+                Optional, opt-in (``combined_mode_ramp_down``, default
+                nan/off): the opposite-direction counterpart of
+                ``operation_combined_mode_ramp_up_constraint``.
 
             - *Operational capacity*
                 - ``operation_combined_power_capacity_max_constraint``
@@ -277,31 +290,81 @@ def add_combined(
     # )
 
     # Operation - Combined ramping (no unit commitment: bounds are expressed
-    # directly against installed capacity, as there is no on/off state)
+    # directly against installed capacity, as there is no on/off state).
+    # Ramp applies to the total across modes, not each mode independently
+    # (else a 2-mode tech's aggregate output could ramp ~2x too fast).
+
+    combined_ramp_up = p.combined_ramp_up.min(
+        [dim for dim in ["mode"] if dim in p.combined_ramp_up.dims]
+    )
+    combined_ramp_down = p.combined_ramp_down.min(
+        [dim for dim in ["mode"] if dim in p.combined_ramp_down.dims]
+    )
 
     m.add_constraints(
         (
-            operation_combined_power
-            - operation_combined_power.shift(hour=1)
+            operation_combined_power.sum("mode")
+            - operation_combined_power.sum("mode").shift(hour=1)
         )
         / p.time_step_duration
-        - p.combined_ramp_up * operation_combined_power_capacity
+        - combined_ramp_up * operation_combined_power_capacity
         <= 0,
         name="operation_combined_ramp_up_constraint",
-        mask=np.isfinite(p.combined_ramp_up) * (p.hour != p.hour[0]),
+        mask=np.isfinite(combined_ramp_up) * (p.hour != p.hour[0]),
     )
 
     m.add_constraints(
         (
-            operation_combined_power.shift(hour=1)
-            - operation_combined_power
+            operation_combined_power.sum("mode").shift(hour=1)
+            - operation_combined_power.sum("mode")
         )
         / p.time_step_duration
-        - p.combined_ramp_down * operation_combined_power_capacity
+        - combined_ramp_down * operation_combined_power_capacity
         <= 0,
         name="operation_combined_ramp_down_constraint",
-        mask=np.isfinite(p.combined_ramp_down) * (p.hour != p.hour[0]),
+        mask=np.isfinite(combined_ramp_down) * (p.hour != p.hour[0]),
     )
+
+    # Optional, opt-in: limits how fast the split between modes shifts,
+    # independent of the aggregate ramp above. Off by default (nan). Applied
+    # pairwise across all modes -- no new variable: power(mode_a) -
+    # power(mode_b) is a linear combination of the existing power variable.
+
+    combined_mode_ramp_up = p.combined_mode_ramp_up.min(
+        [dim for dim in ["mode"] if dim in p.combined_mode_ramp_up.dims]
+    )
+    combined_mode_ramp_down = p.combined_mode_ramp_down.min(
+        [dim for dim in ["mode"] if dim in p.combined_mode_ramp_down.dims]
+    )
+
+    for mode_a, mode_b in itertools.combinations(p.mode.values, 2):
+        combined_mode_balance = operation_combined_power.sel(
+            mode=mode_a
+        ) - operation_combined_power.sel(mode=mode_b)
+
+        m.add_constraints(
+            (
+                combined_mode_balance
+                - combined_mode_balance.shift(hour=1)
+            )
+            / p.time_step_duration
+            - combined_mode_ramp_up * operation_combined_power_capacity
+            <= 0,
+            name=f"operation_combined_mode_ramp_up_constraint_{mode_a}_{mode_b}",
+            mask=np.isfinite(combined_mode_ramp_up) * (p.hour != p.hour[0]),
+        )
+
+        m.add_constraints(
+            (
+                combined_mode_balance.shift(hour=1)
+                - combined_mode_balance
+            )
+            / p.time_step_duration
+            - combined_mode_ramp_down * operation_combined_power_capacity
+            <= 0,
+            name=f"operation_combined_mode_ramp_down_constraint_{mode_a}_{mode_b}",
+            mask=np.isfinite(combined_mode_ramp_down) * (p.hour != p.hour[0]),
+        )
 
     # TODO: Ramp constraints for lag > 1 not implemented yet and for storage
     #     also

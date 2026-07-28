@@ -180,6 +180,22 @@ combined_ramp_up:
   - mode
   - year_op
   type: float64
+combined_mode_ramp_down:
+  default: nan
+  index_set:
+  - area
+  - combined_tech
+  - mode
+  - year_op
+  type: float64
+combined_mode_ramp_up:
+  default: nan
+  index_set:
+  - area
+  - combined_tech
+  - mode
+  - year_op
+  type: float64
 
 
 combined_variable_cost:
@@ -1061,6 +1077,22 @@ process_ramp_down:
   - year_op
   type: float64
 process_ramp_up:
+  default: nan
+  index_set:
+  - area
+  - process_tech
+  - mode
+  - year_op
+  type: float64
+process_mode_ramp_down:
+  default: nan
+  index_set:
+  - area
+  - process_tech
+  - mode
+  - year_op
+  type: float64
+process_mode_ramp_up:
   default: nan
   index_set:
   - area
