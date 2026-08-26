@@ -1,0 +1,16 @@
+# List all pre_processed csv
+
+-   name: conversion.csv
+    description: "contains all the data for conversion technology indexed bi invest_year and technology"
+    contributors:  # Contribution to data wrangling, not creation
+        -   title: Thibaut Knibiehly
+            email: thibaut.knibiehly@mines-paristech.fr
+            path: https://www.github.com/thibaut.knibiehly
+            role: wrangler  # [author, publisher, maintainer, wrangler, contributor]
+    sources:
+        - title: Excel 1
+          id: excel_1
+        - title: Excel 2
+          id: excel_2
+    pre_process: # Description
+        "see study/test_case/pre_process/pre_process.py"

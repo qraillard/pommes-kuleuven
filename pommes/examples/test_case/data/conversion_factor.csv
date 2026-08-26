@@ -1,0 +1,11 @@
+conversion_tech;resource;conversion_factor
+electrolysis;electricity;-1.5
+electrolysis;hydrogen;1.0
+ocgt;electricity;1.0
+ocgt;methane;-1.5
+smr;hydrogen;1.0
+smr;methane;-1.5
+smr_ccs;electricity;-0.1
+smr_ccs;hydrogen;1.0
+smr_ccs;methane;-1.5
+wind_onshore;electricity;1.0

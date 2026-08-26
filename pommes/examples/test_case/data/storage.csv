@@ -1,0 +1,4 @@
+storage_tech;energy_capacity_investment_max;energy_capacity_investment_min;power_capacity_investment_max;power_capacity_investment_min;invest_cost_energy;invest_cost_power;life_span;fixed_cost_energy;fixed_cost_power;finance_rate;main_resource;dissipation;early_decommissioning;annuity_perfect_foresight
+battery;1000;;200;;1000;2000;20;0;0;0;electricity;0.2;0;0
+tank_hydrogen;1000;;100;;2000;2000;20;0;0;0;hydrogen;0;0;0
+tank_methane;1000;;100;;400;400;20;0;0;0;methane;0;0;0

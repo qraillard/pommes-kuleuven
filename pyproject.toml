@@ -1,0 +1,119 @@
+[project]
+name = "pommes"
+version = "0.0.1+kul" # own versioning restarted 2026-07-24 (was inherited from July 2025 fork, static since)
+description = "Planning and Operation Model for Multi-Energy Systems"
+authors = [
+    { name = "Quentin Raillard", email = "quentin.raillard--cazanove@kuleuven.be" }
+]
+license = "MIT"
+readme = "README.md"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+requires-python = ">=3.10,<4.0.0"
+dependencies = [
+    "pandas",
+    "xarray",
+    "linopy",
+    "numpy",
+    "pyyaml",
+    "highspy",
+    "h5netcdf"
+]
+[project.optional-dependencies]
+notebooks = [
+    "notebook",
+    "ipykernel",
+    "ipython",
+    "nbformat"
+]
+visualisation = [
+    "matplotlib",
+]
+pre-process = [
+    "pommes-pre-process"
+]
+all = [
+    "notebook",
+    "ipykernel",
+    "ipython",
+    "nbformat",
+    "matplotlib",
+    "pommes-pre-process"
+]
+
+[build-system]
+requires = ["setuptools >= 61.0"]
+build-backend = "setuptools.build_meta"
+
+
+[tool.setuptools.package-data]
+"*" = ["*.csv", "*.yaml"]
+
+# Formatter and linter settings
+
+[tool.ruff]
+extend-include = ['*.ipynb']
+line-length = 79
+
+[tool.ruff.lint]
+select = [
+    'F',   # pyflakes
+    'E',   # pycodestyle: Error
+    'W',   # pycodestyle: Warning
+    'I',   # isort
+    'D',   # pydocstyle
+    'UP',  # pyupgrade
+    'ANN', # flake-8 annotations
+    'TID', # flake8-tidy-imports
+    'NPY', # numpy
+    'RUF013', # ruff
+]
+
+ignore = [
+    'D203', # 1 blank line required before class docstring
+    'D212', # Multi-line docstring summary should start at the second line
+    'D401', # First line should be in imperative mood
+#    'E501', # Line too long
+    ]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pycodestyle]
+max-line-length = 99
+
+
+[tool.ruff.lint.per-file-ignores]
+# pydocstyle ignores, which could be enabled in future when existing
+# issues are fixed
+"{pommes/tests,pommes/examples,docs}/**"=[
+    'ANN', # flake8-annotations
+    'D100', # Missing docstring in public module
+    'D101', # Missing docstring in public class
+    'D102', # Missing docstring in public method
+    'D103', # Missing docstring in public function
+    'D105', # Missing docstring in magic method
+    'D107', # Missing docstring in __init__
+    'D200', # One-line docstring should fit on one line with quotes
+    'D202', # No blank lines allowed after function docstring
+    'D205', # 1 blank line required between summary line and description
+    'D400', # First line should end with a period
+    'D404', # First word of the docstring should not be "This
+    'D413', # Missing blank line after last section
+    'D415', # First line should end with a period, question mark, or exclamation point
+    'D417', # Missing argument descriptions in the docstring
+]
+
+
+[tool.ruff.lint.flake8-tidy-imports]
+# Disallow all relative imports.
+ban-relative-imports = "all"

@@ -1,0 +1,1574 @@
+carbon_goal:
+  default: nan
+  index_set:
+  - year_op
+  type: float64
+carbon_goal_area:
+  default: nan
+  index_set:
+  - area
+  - year_op
+  type: float64
+carbon_goal_group_areas:
+  default: 0
+  index_set:
+  - area
+  - carbon_goal_group
+  type: bool
+carbon_goal_group_max:
+  default: nan
+  index_set:
+  - carbon_goal_group
+  - year_op
+  type: float64
+carbon:
+  default: 0
+  index_set: []
+  type: bool
+carbon_tax:
+  default: nan
+  index_set:
+  - area
+  - year_op
+  type: float64
+combined:
+  default: 0
+  index_set: []
+  type: bool
+combined_annuity_perfect_foresight:
+  default: 0
+  index_set:
+  - area
+  - combined_tech
+  - year_inv
+  type: bool
+combined_annuity_cost:
+  default: nan
+  index_set:
+  - area
+  - combined_tech
+  - year_dec
+  - year_inv
+  type: float64
+combined_early_decommissioning:
+  default: 0
+  index_set:
+  - area
+  - combined_tech
+  - year_inv
+  type: bool
+combined_emission_factor:
+  default: 0.0
+  index_set:
+  - area
+  - combined_tech
+  - mode
+  - year_op
+  type: float64
+combined_end_of_life:
+  default: 0
+  index_set:
+  - area
+  - combined_tech
+  - year_inv
+  type: int64
+combined_factor:
+  default: 0.0
+  index_set:
+  - area
+  - combined_tech
+  - mode
+  - resource
+  - year_op
+  type: float64
+combined_finance_rate:
+  default: 0.0
+  index_set:
+  - area
+  - combined_tech
+  - year_inv
+  type: float64
+combined_fixed_cost:
+  default: 0
+  index_set:
+  - area
+  - combined_tech
+  - year_op
+  type: float64
+combined_invest_cost:
+  default: 0
+  index_set:
+  - area
+  - combined_tech
+  - year_inv
+  type: float64
+combined_life_span:
+  default: nan
+  index_set:
+  - area
+  - combined_tech
+  - year_inv
+  type: float64
+combined_power_capacity_investment_max:
+  default: nan
+  index_set:
+  - area
+  - combined_tech
+  - year_inv
+  type: float64
+combined_power_capacity_investment_min:
+  default: nan
+  index_set:
+  - area
+  - combined_tech
+  - year_inv
+  type: float64
+combined_must_run:
+  default: nan
+  index_set:
+  - area
+  - combined_tech
+  - mode
+  - year_op
+  type: float64
+
+combined_power_capacity_max:
+  default: nan
+  index_set:
+  - area
+  - combined_tech
+  - year_op
+  type: float64
+
+combined_power_capacity_min:
+  default: nan
+  index_set:
+  - area
+  - combined_tech
+  - year_op
+  type: float64
+
+combined_max_load:
+  default: 1.0
+  index_set:
+  - area
+  - combined_tech
+  - year_op
+  type: float64
+
+combined_min_load:
+  default: 0.0
+  index_set:
+  - area
+  - combined_tech
+  - year_op
+  type: float64
+
+combined_ramp_down:
+  default: nan
+  index_set:
+  - area
+  - combined_tech
+  - mode
+  - year_op
+  type: float64
+combined_ramp_up:
+  default: nan
+  index_set:
+  - area
+  - combined_tech
+  - mode
+  - year_op
+  type: float64
+combined_mode_ramp_down:
+  default: nan
+  index_set:
+  - area
+  - combined_tech
+  - mode
+  - year_op
+  type: float64
+combined_mode_ramp_up:
+  default: nan
+  index_set:
+  - area
+  - combined_tech
+  - mode
+  - year_op
+  type: float64
+
+
+combined_variable_cost:
+  default: 0
+  index_set:
+  - area
+  - combined_tech
+  - mode
+  - year_op
+  type: float64
+conversion:
+  default: 0
+  index_set: []
+  type: bool
+conversion_annuity_perfect_foresight:
+  default: 0
+  index_set:
+  - area
+  - conversion_tech
+  - year_inv
+  type: bool
+conversion_annuity_cost:
+  default: nan
+  index_set:
+  - area
+  - conversion_tech
+  - year_dec
+  - year_inv
+  type: float64
+conversion_availability:
+  default: nan
+  index_set:
+  - area
+  - conversion_tech
+  - hour
+  - year_op
+  type: float64
+conversion_early_decommissioning:
+  default: 0
+  index_set:
+  - area
+  - conversion_tech
+  - year_inv
+  type: bool
+conversion_emission_factor:
+  default: 0.0
+  index_set:
+  - area
+  - conversion_tech
+  - year_op
+  type: float64
+conversion_end_of_life:
+  default: 0
+  index_set:
+  - area
+  - conversion_tech
+  - year_inv
+  type: int64
+conversion_factor:
+  default: 0.0
+  index_set:
+  - area
+  - conversion_tech
+  - resource
+  - year_op
+  type: float64
+conversion_finance_rate:
+  default: 0.0
+  index_set:
+  - area
+  - conversion_tech
+  - year_inv
+  type: float64
+conversion_fixed_cost:
+  default: 0
+  index_set:
+  - area
+  - conversion_tech
+  - year_op
+  type: float64
+conversion_invest_cost:
+  default: 0
+  index_set:
+  - area
+  - conversion_tech
+  - year_inv
+  type: float64
+conversion_life_span:
+  default: nan
+  index_set:
+  - area
+  - conversion_tech
+  - year_inv
+  type: float64
+conversion_power_capacity_max:
+  default: nan
+  index_set:
+  - area
+  - conversion_tech
+  - year_op
+  type: float64
+conversion_power_capacity_min:
+  default: nan
+  index_set:
+  - area
+  - conversion_tech
+  - year_op
+  type: float64
+conversion_power_capacity_investment_max:
+  default: nan
+  index_set:
+  - area
+  - conversion_tech
+  - year_inv
+  type: float64
+conversion_power_capacity_investment_min:
+  default: nan
+  index_set:
+  - area
+  - conversion_tech
+  - year_inv
+  type: float64
+conversion_max_yearly_production:
+  default: nan
+  index_set:
+  - area
+  - conversion_tech
+  - year_op
+  type: float64
+conversion_max_daily_production:
+  default: nan
+  index_set:
+  - area
+  - conversion_tech
+  - year_op
+  type: float64
+conversion_must_run:
+  default: nan
+  index_set:
+  - area
+  - conversion_tech
+  - year_op
+  type: float64
+conversion_ramp_down:
+  default: nan
+  index_set:
+  - area
+  - conversion_tech
+  - year_op
+  type: float64
+conversion_ramp_up:
+  default: nan
+  index_set:
+  - area
+  - conversion_tech
+  - year_op
+  type: float64
+conversion_variable_cost:
+  default: 0
+  index_set:
+  - area
+  - conversion_tech
+  - year_op
+  type: float64
+load_shedding_cost:
+  default: 0.0
+  index_set:
+  - area
+  - resource
+  - year_op
+  type: float64
+load_shedding_max_capacity:
+  default: nan
+  index_set:
+  - area
+  - resource
+  - year_op
+  type: float64
+demand:
+  default: 0.0
+  index_set:
+  - area
+  - hour
+  - resource
+  - year_op
+  type: float64
+discount_factor:
+  default: 1.
+  index_set:
+  - year_op
+  type: float64
+discount_rate:
+  default: 0.0
+  index_set:
+  - year_op
+  type: float64
+net_import:
+  default: 0
+  index_set: []
+  type: bool
+net_import_emission_factor:
+  default: 0.0
+  index_set:
+  - area
+  - hour
+  - resource
+  - year_op
+  type: float64
+net_import_import_price:
+  default: 0.0
+  index_set:
+  - area
+  - hour
+  - resource
+  - year_op
+  type: float64
+net_import_export_price:
+  default: 0.0
+  index_set:
+  - area
+  - hour
+  - resource
+  - year_op
+  type: float64
+net_import_max_yearly_energy_export:
+  default: nan
+  index_set:
+  - area
+  - resource
+  - year_op
+  type: float64
+net_import_max_yearly_energy_import:
+  default: nan
+  index_set:
+  - area
+  - resource
+  - year_op
+  type: float64
+net_import_total_emission_factor:
+  default: 0.0
+  index_set:
+  - area
+  - hour
+  - resource
+  - year_op
+  type: float64
+operation_year_duration:
+  default: 8760
+  index_set:
+  - year_op
+  type: float64
+operation_day_duration:
+  default: 24
+  index_set: []
+  type: int64
+planning_step:
+  default: 0
+  index_set: []
+  type: int64
+spillage_cost:
+  default: 0.0
+  index_set:
+  - area
+  - resource
+  - year_op
+  type: float64
+spillage_max_capacity:
+  default: nan
+  index_set:
+  - area
+  - resource
+  - year_op
+  type: float64
+storage:
+  default: 0
+  index_set: []
+  type: bool
+storage_annuity_perfect_foresight:
+  default: 0
+  index_set:
+  - area
+  - storage_tech
+  - year_inv
+  type: bool
+storage_annuity_cost_energy:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_dec
+  - year_inv
+  type: float64
+storage_annuity_cost_power:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_dec
+  - year_inv
+  type: float64
+storage_dissipation:
+  default: 0.0
+  index_set:
+  - area
+  - storage_tech
+  - year_op
+  type: float64
+storage_early_decommissioning:
+  default: 0
+  index_set:
+  - area
+  - storage_tech
+  - year_inv
+  type: bool
+storage_end_of_life:
+  default: 0
+  index_set:
+  - area
+  - storage_tech
+  - year_inv
+  type: int64
+storage_factor_in:
+  default: 0.0
+  index_set:
+  - area
+  - resource
+  - storage_tech
+  - year_op
+  type: float64
+storage_factor_keep:
+  default: 0.0
+  index_set:
+  - area
+  - resource
+  - storage_tech
+  - year_op
+  type: float64
+storage_factor_out:
+  default: 0.0
+  index_set:
+  - area
+  - resource
+  - storage_tech
+  - year_op
+  type: float64
+storage_finance_rate:
+  default: 0.0
+  index_set:
+  - area
+  - storage_tech
+  - year_inv
+  type: float64
+storage_fixed_cost_energy:
+  default: 0.0
+  index_set:
+  - area
+  - storage_tech
+  - year_op
+  type: float64
+storage_fixed_cost_power:
+  default: 0.0
+  index_set:
+  - area
+  - storage_tech
+  - year_op
+  type: float64
+storage_invest_cost_energy:
+  default: 0.0
+  index_set:
+  - area
+  - storage_tech
+  - year_inv
+  type: float64
+storage_invest_cost_power:
+  default: 0.0
+  index_set:
+  - area
+  - storage_tech
+  - year_inv
+  type: float64
+storage_life_span:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_inv
+  type: float64
+storage_main_resource:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  type: str
+
+storage_discharge_ramp:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_op
+  type: float64
+storage_charge_ramp:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_op
+  type: float64
+
+storage_energy_capacity_max:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_op
+  type: float64
+
+storage_energy_capacity_min:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_op
+  type: float64
+
+storage_power_capacity_max:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_op
+  type: float64
+
+storage_power_capacity_min:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_op
+  type: float64
+
+storage_energy_capacity_investment_max:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_inv
+  type: float64
+storage_power_capacity_investment_max:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_inv
+  type: float64
+storage_energy_capacity_investment_min:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_inv
+  type: float64
+storage_power_capacity_investment_min:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  - year_inv
+  type: float64
+storage_energy_power_ratio:
+  default: nan
+  index_set:
+  - area
+  - storage_tech
+  type: float64
+time_step_duration:
+  default: 1
+  index_set:
+  - hour
+  type: float64
+transport:
+  default: 0
+  index_set: []
+  type: bool
+transport_annuity_perfect_foresight:
+  default: 0
+  index_set:
+  - link
+  - transport_tech
+  - year_inv
+  type: bool
+transport_annuity_cost:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - year_dec
+  - year_inv
+  type: float64
+transport_area_from:
+  default: None
+  index_set:
+  - link
+  - transport_tech
+  type: str
+transport_area_to:
+  default: None
+  index_set:
+  - link
+  - transport_tech
+  type: str
+transport_early_decommissioning:
+  default: 0
+  index_set:
+  - link
+  - transport_tech
+  - year_inv
+  type: bool
+transport_end_of_life:
+  default: 0
+  index_set:
+  - link
+  - transport_tech
+  - year_inv
+  type: int64
+transport_finance_rate:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - year_inv
+  type: float64
+transport_fixed_cost:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - year_op
+  type: float64
+transport_hurdle_costs:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - year_op
+  type: float64
+transport_invest_cost:
+  default: 0
+  index_set:
+  - link
+  - transport_tech
+  - year_inv
+  type: float64
+transport_life_span:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - year_inv
+  type: float64
+transport_power_capacity_investment_max:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - year_inv
+  type: float64
+transport_power_capacity_investment_min:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - year_inv
+  type: float64
+
+transport_power_capacity_max:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - year_op
+  type: float64
+
+transport_linepack_capacity:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - year_op
+  type: float64
+transport_power_capacity_min:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - year_op
+  type: float64
+
+transport_resource:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  type: str
+transport_availability:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - hour
+  - year_op
+  type: float64
+
+transport_ramp_down:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - year_op
+  type: float64
+transport_ramp_up:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - year_op
+  type: float64
+
+turpe:
+  default: 0
+  index_set: []
+  type: bool
+turpe_calendar:
+  default: nan
+  index_set:
+  - hour
+  - year_op
+  type: str
+turpe_fixed_cost:
+  default: 0.0
+  index_set:
+  - hour_type
+  - year_op
+  type: float64
+turpe_variable_cost:
+  default: 0.0
+  index_set:
+  - hour_type
+  - year_op
+  type: float64
+year_ref:
+  default: 2000
+  index_set: []
+  type: int64
+retrofit_conversion:
+  default: 0
+  index_set: []
+  type: bool
+retrofit_conversion_tech_from:
+  default: None
+  index_set:
+  - retrofit_conversion_pair
+  type: str
+retrofit_conversion_tech_to:
+  default: None
+  index_set:
+  - retrofit_conversion_pair
+  type: str
+retrofit_conversion_life_span:
+  default: 0
+  index_set:
+  - area
+  - retrofit_conversion_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_conversion_end_of_life:
+  default: 0
+  index_set:
+  - area
+  - retrofit_conversion_pair
+  - year_ret
+  - year_inv
+  type: int64
+retrofit_conversion_finance_rate:
+  default: 0.0
+  index_set:
+  - area
+  - retrofit_conversion_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_conversion_invest_cost:
+  default: 0
+  index_set:
+  - area
+  - retrofit_conversion_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_conversion_annuity_cost:
+  default: nan
+  index_set:
+  - area
+  - retrofit_conversion_pair
+  - year_dec
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_conversion_annuity_perfect_foresight:
+  default: 0
+  index_set:
+  - area
+  - retrofit_conversion_pair
+  - year_ret
+  - year_inv
+  type: bool
+retrofit_conversion_early_decommissioning:
+  default: 0
+  index_set:
+  - area
+  - retrofit_conversion_pair
+  - year_ret
+  - year_inv
+  type: bool
+retrofit_conversion_ret_ratio:
+  default: 1.0
+  index_set:
+  - area
+  - retrofit_conversion_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_conversion_eligible_share:
+  default: 1.0
+  index_set:
+  - area
+  - conversion_tech
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_conversion_power_capacity_investment_min:
+  default: nan
+  index_set:
+  - area
+  - retrofit_conversion_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_conversion_power_capacity_investment_max:
+  default: nan
+  index_set:
+  - area
+  - retrofit_conversion_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_combined:
+  default: 0
+  index_set: []
+  type: bool
+retrofit_combined_tech_from:
+  default: None
+  index_set:
+  - retrofit_combined_pair
+  type: str
+retrofit_combined_tech_to:
+  default: None
+  index_set:
+  - retrofit_combined_pair
+  type: str
+retrofit_combined_life_span:
+  default: 0
+  index_set:
+  - area
+  - retrofit_combined_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_combined_end_of_life:
+  default: 0
+  index_set:
+  - area
+  - retrofit_combined_pair
+  - year_ret
+  - year_inv
+  type: int64
+retrofit_combined_finance_rate:
+  default: 0.0
+  index_set:
+  - area
+  - retrofit_combined_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_combined_invest_cost:
+  default: 0
+  index_set:
+  - area
+  - retrofit_combined_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_combined_annuity_cost:
+  default: nan
+  index_set:
+  - area
+  - retrofit_combined_pair
+  - year_dec
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_combined_annuity_perfect_foresight:
+  default: 0
+  index_set:
+  - area
+  - retrofit_combined_pair
+  - year_ret
+  - year_inv
+  type: bool
+retrofit_combined_early_decommissioning:
+  default: 0
+  index_set:
+  - area
+  - retrofit_combined_pair
+  - year_ret
+  - year_inv
+  type: bool
+retrofit_combined_ret_ratio:
+  default: 1.0
+  index_set:
+  - area
+  - retrofit_combined_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_combined_eligible_share:
+  default: 1.0
+  index_set:
+  - area
+  - combined_tech
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_combined_power_capacity_investment_min:
+  default: nan
+  index_set:
+  - area
+  - retrofit_combined_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_combined_power_capacity_investment_max:
+  default: nan
+  index_set:
+  - area
+  - retrofit_combined_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_storage:
+  default: 0
+  index_set: []
+  type: bool
+retrofit_storage_tech_from:
+  default: None
+  index_set:
+  - retrofit_storage_pair
+  type: str
+retrofit_storage_tech_to:
+  default: None
+  index_set:
+  - retrofit_storage_pair
+  type: str
+retrofit_storage_life_span:
+  default: 0
+  index_set:
+  - area
+  - retrofit_storage_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_storage_end_of_life:
+  default: 0
+  index_set:
+  - area
+  - retrofit_storage_pair
+  - year_ret
+  - year_inv
+  type: int64
+retrofit_storage_finance_rate:
+  default: 0.0
+  index_set:
+  - area
+  - retrofit_storage_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_storage_invest_cost_power:
+  default: 0
+  index_set:
+  - area
+  - retrofit_storage_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_storage_invest_cost_energy:
+  default: 0
+  index_set:
+  - area
+  - retrofit_storage_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_storage_annuity_cost_power:
+  default: nan
+  index_set:
+  - area
+  - retrofit_storage_pair
+  - year_dec
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_storage_annuity_cost_energy:
+  default: nan
+  index_set:
+  - area
+  - retrofit_storage_pair
+  - year_dec
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_storage_annuity_perfect_foresight:
+  default: 0
+  index_set:
+  - area
+  - retrofit_storage_pair
+  - year_ret
+  - year_inv
+  type: bool
+retrofit_storage_early_decommissioning:
+  default: 0
+  index_set:
+  - area
+  - retrofit_storage_pair
+  - year_ret
+  - year_inv
+  type: bool
+retrofit_storage_ret_ratio_power:
+  default: 1.0
+  index_set:
+  - area
+  - retrofit_storage_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_storage_ret_ratio_energy:
+  default: 1.0
+  index_set:
+  - area
+  - retrofit_storage_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_storage_eligible_share:
+  default: 1.0
+  index_set:
+  - area
+  - storage_tech
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_storage_power_capacity_investment_min:
+  default: nan
+  index_set:
+  - area
+  - retrofit_storage_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_storage_power_capacity_investment_max:
+  default: nan
+  index_set:
+  - area
+  - retrofit_storage_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_storage_energy_capacity_investment_min:
+  default: nan
+  index_set:
+  - area
+  - retrofit_storage_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_storage_energy_capacity_investment_max:
+  default: nan
+  index_set:
+  - area
+  - retrofit_storage_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_transport:
+  default: 0
+  index_set: []
+  type: bool
+retrofit_transport_tech_from:
+  default: None
+  index_set:
+  - retrofit_transport_pair
+  type: str
+retrofit_transport_tech_to:
+  default: None
+  index_set:
+  - retrofit_transport_pair
+  type: str
+retrofit_transport_life_span:
+  default: 0
+  index_set:
+  - link
+  - retrofit_transport_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_transport_end_of_life:
+  default: 0
+  index_set:
+  - link
+  - retrofit_transport_pair
+  - year_ret
+  - year_inv
+  type: int64
+retrofit_transport_finance_rate:
+  default: 0.0
+  index_set:
+  - link
+  - retrofit_transport_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_transport_invest_cost:
+  default: 0
+  index_set:
+  - link
+  - retrofit_transport_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_transport_annuity_cost:
+  default: nan
+  index_set:
+  - link
+  - retrofit_transport_pair
+  - year_dec
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_transport_annuity_perfect_foresight:
+  default: 0
+  index_set:
+  - link
+  - retrofit_transport_pair
+  - year_ret
+  - year_inv
+  type: bool
+retrofit_transport_early_decommissioning:
+  default: 0
+  index_set:
+  - link
+  - retrofit_transport_pair
+  - year_ret
+  - year_inv
+  type: bool
+retrofit_transport_ret_ratio:
+  default: 1.0
+  index_set:
+  - link
+  - retrofit_transport_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_transport_eligible_share:
+  default: 1.0
+  index_set:
+  - link
+  - transport_tech
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_transport_power_capacity_investment_min:
+  default: nan
+  index_set:
+  - link
+  - retrofit_transport_pair
+  - year_ret
+  - year_inv
+  type: float64
+retrofit_transport_power_capacity_investment_max:
+  default: nan
+  index_set:
+  - link
+  - retrofit_transport_pair
+  - year_ret
+  - year_inv
+  type: float64
+process:
+  default: 0
+  index_set: []
+  type: bool
+process_annuity_perfect_foresight:
+  default: 0
+  index_set:
+  - area
+  - process_tech
+  - year_inv
+  type: bool
+process_annuity_cost:
+  default: nan
+  index_set:
+  - area
+  - process_tech
+  - year_dec
+  - year_inv
+  type: float64
+process_early_decommissioning:
+  default: 0
+  index_set:
+  - area
+  - process_tech
+  - year_inv
+  type: bool
+process_emission_factor:
+  default: 0.0
+  index_set:
+  - area
+  - process_tech
+  - mode
+  - year_op
+  type: float64
+process_end_of_life:
+  default: 0
+  index_set:
+  - area
+  - process_tech
+  - year_inv
+  type: int64
+process_factor:
+  default: 0.0
+  index_set:
+  - area
+  - process_tech
+  - mode
+  - resource
+  - year_op
+  type: float64
+process_finance_rate:
+  default: 0.0
+  index_set:
+  - area
+  - process_tech
+  - year_inv
+  type: float64
+process_fixed_cost:
+  default: 0
+  index_set:
+  - area
+  - process_tech
+  - year_op
+  type: float64
+process_invest_cost:
+  default: 0
+  index_set:
+  - area
+  - process_tech
+  - year_inv
+  type: float64
+process_life_span:
+  default: nan
+  index_set:
+  - area
+  - process_tech
+  - year_inv
+  type: float64
+process_power_capacity_investment_max:
+  default: nan
+  index_set:
+  - area
+  - process_tech
+  - year_inv
+  type: float64
+process_power_capacity_investment_min:
+  default: nan
+  index_set:
+  - area
+  - process_tech
+  - year_inv
+  type: float64
+
+process_power_capacity_max:
+  default: nan
+  index_set:
+  - area
+  - process_tech
+  - year_op
+  type: float64
+
+process_power_capacity_min:
+  default: nan
+  index_set:
+  - area
+  - process_tech
+  - year_op
+  type: float64
+
+process_unit_size:
+  default: 0
+  index_set:
+    - area
+    - process_tech
+    - year_op
+  type: float64
+
+process_max_load:
+  default: 1.0
+  index_set:
+  - area
+  - process_tech
+  - year_op
+  type: float64
+
+process_min_load:
+  default: 0.0
+  index_set:
+  - area
+  - process_tech
+  - year_op
+  type: float64
+
+process_startup_cost:
+  default: 0
+  index_set:
+    - area
+    - process_tech
+    - year_op
+  type: float64
+
+process_shutdown_cost:
+  default: 0
+  index_set:
+    - area
+    - process_tech
+    - year_op
+  type: float64
+
+process_minimum_startup_time:
+  default: 0
+  index_set:
+    - area
+    - process_tech
+    - year_op
+  type: int64
+
+process_minimum_shutdown_time:
+  default: 0
+  index_set:
+    - area
+    - process_tech
+    - year_op
+  type: int64
+
+process_ramp_down:
+  default: nan
+  index_set:
+  - area
+  - process_tech
+  - mode
+  - year_op
+  type: float64
+process_ramp_up:
+  default: nan
+  index_set:
+  - area
+  - process_tech
+  - mode
+  - year_op
+  type: float64
+process_mode_ramp_down:
+  default: nan
+  index_set:
+  - area
+  - process_tech
+  - mode
+  - year_op
+  type: float64
+process_mode_ramp_up:
+  default: nan
+  index_set:
+  - area
+  - process_tech
+  - mode
+  - year_op
+  type: float64
+
+process_no_shutdown:
+  default: 0
+  index_set:
+  - area
+  - process_tech
+  - year_op
+  type: bool
+
+process_variable_cost:
+  default: 0
+  index_set:
+  - area
+  - process_tech
+  - mode
+  - year_op
+  type: float64
+
+flexdem:
+  default: 0
+  index_set: []
+  type: bool
+flexdem_demand:
+  default: 0.0
+  index_set:
+  - area
+  - hour
+  - resource
+  - year_op
+  type: float64
+
+flexdem_conservation_hrs:
+  default: 0
+  index_set:
+    - area
+    - resource
+    - year_op
+  type: int64
+
+flexdem_ramp_up:
+  default: nan
+  index_set:
+  - area
+  - resource
+  - year_op
+  type: float64
+
+flexdem_ramp_down:
+  default: nan
+  index_set:
+  - area
+  - resource
+  - year_op
+  type: float64
+
+flexdem_maxload_ratio:
+  default: 1.0
+  index_set:
+  - area
+  - resource
+  - year_op
+  type: float64
+
+flexdem_minload_ratio:
+  default: 1.0
+  index_set:
+  - area
+  - resource
+  - year_op
+  type: float64
+
+

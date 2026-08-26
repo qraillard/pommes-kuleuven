@@ -1,0 +1,7 @@
+link;transport_tech;area_from;area_to;invest_cost;fixed_cost;life_span;finance_rate;hurdle_costs;transport_resource;early_decommissioning;annuity_perfect_foresight;power_capacity_investment_max;power_capacity_investment_min
+link_1;big_methane_pipe;area_1;area_2;300;10;20;0;0.01;methane;0;0;;
+link_1;methane_pipe;area_1;area_2;200;10;20;0;0.01;methane;0;0;;
+link_1;power_line;area_1;area_2;100;10;20;0;0.01;electricity;0;0;;
+link_2;big_methane_pipe;area_2;area_1;300;10;20;0;0.01;methane;0;0;;
+link_2;methane_pipe;area_2;area_1;200;10;20;0;0.01;methane;0;0;;
+link_2;power_line;area_2;area_1;100;10;20;0;0.01;electricity;0;0;;

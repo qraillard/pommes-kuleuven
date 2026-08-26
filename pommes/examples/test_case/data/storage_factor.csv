@@ -1,0 +1,10 @@
+resource;storage_tech;storage_factor_in;storage_factor_out;storage_factor_keep
+electricity;battery;-2;0.5;0
+electricity;tank_hydrogen;-1;0.0;0
+electricity;tank_methane;-1;0.0;0
+hydrogen;battery;0;0.0;0
+hydrogen;tank_hydrogen;-1;1.0;0
+hydrogen;tank_methane;0;0.0;0
+methane;battery;0;0.0;0
+methane;tank_hydrogen;0;0.0;0
+methane;tank_methane;-1;1.0;0
