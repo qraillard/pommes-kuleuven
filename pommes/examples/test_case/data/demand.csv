@@ -1,0 +1,13 @@
+resource;year_op;demand
+electricity;2020;10
+heat;2020;2
+hydrogen;2020;3
+electricity;2030;10
+heat;2030;2
+hydrogen;2030;2
+electricity;2040;10
+heat;2040;2
+hydrogen;2040;4
+electricity;2050;10
+heat;2050;2
+hydrogen;2050;0

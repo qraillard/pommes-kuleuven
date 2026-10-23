@@ -1,0 +1,11 @@
+conversion_tech;hour;availability
+wind_onshore;0;0.5
+wind_onshore;1;0.7
+wind_onshore;2;0.1
+wind_onshore;3;0.0
+wind_onshore;4;0.2
+wind_onshore;5;0.4
+wind_onshore;6;0.8
+wind_onshore;7;0.9
+wind_onshore;8;0.6
+wind_onshore;9;0.3

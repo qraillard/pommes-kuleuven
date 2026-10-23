@@ -1,0 +1,17 @@
+resource;year_op;operation_net_import_export_yearly_max_constraint
+electricity;2020;-0.0
+electricity;2030;-0.0
+electricity;2040;-0.0
+electricity;2050;-0.0
+heat;2020;-0.0
+heat;2030;-0.0
+heat;2040;-0.0
+heat;2050;-0.0
+hydrogen;2020;-0.0
+hydrogen;2030;-0.0
+hydrogen;2040;-0.0
+hydrogen;2050;-0.0
+methane;2020;-20.0
+methane;2030;-20.0
+methane;2040;-20.0
+methane;2050;-20.0

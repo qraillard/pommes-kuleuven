@@ -1,0 +1,62 @@
+# Byte-compiled / optimized Python files
+__pycache__/
+*.py[cod]
+
+# C extensions
+*.so
+
+# Distribution / packaging
+dist/
+docs/build/
+*.egg-info/
+build/
+
+# Virtual environment
+venv/
+
+# IDE specific files
+.idea/
+*.iml
+*.pydevproject
+
+# Compiled source
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.pyc
+
+# Backup files
+*~
+*.bak
+*.swp
+*.tmp
+*#
+
+# PyCharm-specific files
+Temp/
+temp/
+*.idea/
+*.ipr
+*.iws
+
+# Simulation outputs
+out/
+output/
+outputs/
+
+# Studies
+study/*
+
+# MS temp file
+~$*
+*.xlsx
+*.xlsm
+
+# Other files
+*.drawio
+*.drawio.bkp
+
+# Claude session logs (not for commit)
+CLAUDE_CHANGES.md

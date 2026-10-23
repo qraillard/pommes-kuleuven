@@ -1,0 +1,3 @@
+combined_tech;mode;emission_factor;variable_cost;must_run;ramp_up;ramp_down
+electric_boiler;electric;0;1;;;
+electric_boiler;fossil;10;1;;;

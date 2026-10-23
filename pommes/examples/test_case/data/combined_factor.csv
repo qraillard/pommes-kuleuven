@@ -1,0 +1,5 @@
+combined_tech;mode;resource;combined_factor
+electric_boiler;electric;electricity;-1
+electric_boiler;electric;heat;1
+electric_boiler;fossil;methane;-1.5
+electric_boiler;fossil;heat;1

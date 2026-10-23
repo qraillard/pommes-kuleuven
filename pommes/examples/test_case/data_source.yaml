@@ -1,0 +1,41 @@
+# List all sources by source/file
+
+-   id: excel_1
+    title: Excel number 1
+    path: https://www.cloud.mines-paristech.fr/thibaut.knibiehly/excel_number_1
+    contributor:
+      -   title: Thibaut Knibiehly
+          email: thibaut.knibiehly@mines-paristech.fr
+          path: https://www.github.com/thibaut.knibiehly
+          role: publisher  # [author, publisher, maintainer, wrangler, contributor]
+      -   title: Quentin Raillard--Cazanove
+          email: quentin.raillard--cazanove@mines-paristech.fr
+          path: https://www.github.com/quentin.raillard
+          role: maintainer  # [author, publisher, maintainer, wrangler, contributor]
+    created: 2024-05-02T08:00Z
+    # Optional
+    downloaded: 2024-05-02T08:00+02:00
+    description: "Contains the following data. Precise unit of measurement"
+    licenses:
+      -   name: CC-BY-4.0
+          path: to add
+          title: License...
+
+-   id: excel_2
+    title: Excel number 2
+    path: https://www.cloud.mines-paristech.fr/thibaut.knibiehly/excel_number_2
+    contributor:
+      -   title: Thibaut Knibiehly
+          email: thibaut.knibiehly@mines-paristech.fr
+          path: https://www.github.com/thibaut.knibiehly
+          role: publisher  # [author, publisher, maintainer, wrangler, contributor]
+      -   title: Quentin Raillard--Cazanove
+          email: quentin.raillard--cazanove@mines-paristech.fr
+          path: https://www.github.com/quentin.raillard
+          role: maintainer  # [author, publisher, maintainer, wrangler, contributor]
+    created: 2024-05-02T08:00
+    description: lorem ipsum
+    licenses:
+      -   name: CC-BY-4.0
+          path: to add
+          title: License...

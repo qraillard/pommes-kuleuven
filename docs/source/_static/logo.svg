@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SVG recreation of the Matplotlib navigation wheel.
+  Coordinate system: center at (0,0), with viewBox from -1.5 to 1.5.
+  The <g> element with transform="scale(1,-1)" flips the y‑axis so that positive y is upward.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1.5 -1.5 3 3" width="600" height="600">
+  <!-- Flip the y-axis so that positive y is up -->
+  <g transform="scale(1,-1)">
+
+    <!-- Spokes (black ellipses at the center) -->
+    <ellipse cx="0" cy="0" rx="1" ry="0.05" fill="black" transform="rotate(0 0 0)" />
+    <ellipse cx="0" cy="0" rx="1" ry="0.05" fill="black" transform="rotate(45 0 0)" />
+    <ellipse cx="0" cy="0" rx="1" ry="0.05" fill="black" transform="rotate(90 0 0)" />
+    <ellipse cx="0" cy="0" rx="1" ry="0.05" fill="black" transform="rotate(135 0 0)" />
+
+    <!-- Hub / Inner Ring: a darker red circle with a white center -->
+    <circle cx="0" cy="0" r="0.2" fill="#800000" />
+    <circle cx="0" cy="0" r="0.13" fill="black" />
+    <circle cx="0" cy="0" r="0.07" fill="white" />
+
+    <!-- Outer wheel: an annulus drawn as a circle with stroke width 0.1 -->
+    <circle cx="0" cy="0" r="1" fill="none" stroke="black" stroke-width="0.1" />
+
+    <!-- Blank circles on the outer wheel -->
+    <circle cx="1" cy="0" r="0.035" fill="white" />
+    <circle cx="0.7071" cy="0.7071" r="0.035" fill="white" />
+    <circle cx="0" cy="1" r="0.035" fill="white" />
+    <circle cx="-0.7071" cy="0.7071" r="0.035" fill="white" />
+    <circle cx="-1" cy="0" r="0.035" fill="white" />
+    <circle cx="-0.7071" cy="-0.7071" r="0.035" fill="white" />
+    <circle cx="0" cy="-1" r="0.035" fill="white" />
+    <circle cx="0.7071" cy="-0.7071" r="0.035" fill="white" />
+
+        <!-- Handles (darker red ellipses) -->
+    <g transform="rotate(0)">
+      <g transform="translate(1.286,0)">
+        <ellipse cx="0" cy="0" rx="0.15" ry="0.05" fill="#800000" />
+      </g>
+    </g>
+    <g transform="rotate(45)">
+      <g transform="translate(1.286,0)">
+        <ellipse cx="0" cy="0" rx="0.15" ry="0.05" fill="#800000" />
+      </g>
+    </g>
+    <g transform="rotate(90)">
+      <g transform="translate(1.286,0)">
+        <ellipse cx="0" cy="0" rx="0.15" ry="0.05" fill="#800000" />
+      </g>
+    </g>
+    <g transform="rotate(135)">
+      <g transform="translate(1.286,0)">
+        <ellipse cx="0" cy="0" rx="0.15" ry="0.05" fill="#800000" />
+      </g>
+    </g>
+    <g transform="rotate(180)">
+      <g transform="translate(1.286,0)">
+        <ellipse cx="0" cy="0" rx="0.15" ry="0.05" fill="#800000" />
+      </g>
+    </g>
+    <g transform="rotate(225)">
+      <g transform="translate(1.286,0)">
+        <ellipse cx="0" cy="0" rx="0.15" ry="0.05" fill="#800000" />
+      </g>
+    </g>
+    <g transform="rotate(270)">
+      <g transform="translate(1.286,0)">
+        <ellipse cx="0" cy="0" rx="0.15" ry="0.05" fill="#800000" />
+      </g>
+    </g>
+    <g transform="rotate(315)">
+      <g transform="translate(1.286,0)">
+        <ellipse cx="0" cy="0" rx="0.15" ry="0.05" fill="#800000" />
+      </g>
+    </g>
+
+    <!-- Handle bases: Two small rounded rectangles per spoke (for all 8 spokes) -->
+    <!-- For angle = 0° -->
+    <g transform="rotate(0)">
+      <g transform="translate(1.083,0) rotate(90)">
+        <rect x="-0.05" y="-0.01" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>
+      </g>
+      <g transform="translate(1.141,0) rotate(90)">
+        <rect x="-0.05" y="0" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>
+      </g>
+    </g>
+    <!-- For angle = 45° -->
+    <g transform="rotate(45)">
+      <g transform="translate(1.083,0) rotate(90)">
+        <rect x="-0.05" y="-0.01" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>      </g>
+      <g transform="translate(1.141,0) rotate(90)">
+       <rect x="-0.05" y="0" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>
+      </g>
+    </g>
+    <!-- For angle = 90° -->
+    <g transform="rotate(90)">
+      <g transform="translate(1.083,0) rotate(90)">
+        <rect x="-0.05" y="-0.01" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>      </g>
+      <g transform="translate(1.141,0) rotate(90)">
+        <rect x="-0.05" y="0" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>
+      </g>
+    </g>
+    <!-- For angle = 135° -->
+    <g transform="rotate(135)">
+      <g transform="translate(1.083,0) rotate(90)">
+        <rect x="-0.05" y="-0.01" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>      </g>
+      <g transform="translate(1.141,0) rotate(90)">
+        <rect x="-0.05" y="0" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>
+      </g>
+    </g>
+    <!-- For angle = 180° -->
+    <g transform="rotate(180)">
+      <g transform="translate(1.083,0) rotate(90)">
+        <rect x="-0.05" y="-0.01" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>      </g>
+      <g transform="translate(1.141,0) rotate(90)">
+        <rect x="-0.05" y="0" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>
+      </g>
+    </g>
+    <!-- For angle = 225° -->
+    <g transform="rotate(225)">
+      <g transform="translate(1.083,0) rotate(90)">
+        <rect x="-0.05" y="-0.01" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>      </g>
+      <g transform="translate(1.141,0) rotate(90)">
+        <rect x="-0.05" y="0" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>
+      </g>
+    </g>
+    <!-- For angle = 270° -->
+    <g transform="rotate(270)">
+      <g transform="translate(1.083,0) rotate(90)">
+        <rect x="-0.05" y="-0.01" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>      </g>
+      <g transform="translate(1.141,0) rotate(90)">
+        <rect x="-0.05" y="0" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>
+      </g>
+    </g>
+    <!-- For angle = 315° -->
+    <g transform="rotate(315)">
+      <g transform="translate(1.083,0) rotate(90)">
+        <rect x="-0.05" y="-0.01" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>      </g>
+      <g transform="translate(1.141,0) rotate(90)">
+        <rect x="-0.05" y="0" width="0.1" height="0.05" fill="black"
+              rx="0.02" ry="0.02"/>
+      </g>
+    </g>
+  </g>
+</svg>
