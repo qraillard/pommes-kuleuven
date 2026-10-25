@@ -260,38 +260,6 @@ def test_check_inputs_never_injects_retrofit_defaults_for_a_plain_study():
     assert retrofit_vars == []
 
 
-# Resolved from this file's location, not the working directory pytest
-# is invoked from: pommes/tests/test_retrofit_generic.py -> parents[3]
-# is the directory that holds this checkout and its sibling studies.
-_MODELLING_DIR = pathlib.Path(__file__).resolve().parents[3]
-
-STUDY_CONFIGS = [
-    _MODELLING_DIR / "POMMES-BE-IND-EU" / "config_REACTORS.yaml",
-    _MODELLING_DIR / "POMMES-BE-IND-Adequacy" / "config.yaml",
-]
-
-
-@pytest.mark.parametrize(
-    "config_path", STUDY_CONFIGS, ids=lambda p: p.parent.name
-)
-def test_real_study_configs_gain_no_retrofit_variables(config_path):
-    """
-    Secondary, words-only check: these two real study configs happen
-    not to mention retrofit either. Skips cleanly if the sibling study
-    checkouts are absent. The mechanism itself is proved by
-    test_check_inputs_never_injects_retrofit_defaults_for_a_plain_study
-    above; this test alone would not catch the filter being deleted.
-    """
-    if not config_path.exists():
-        pytest.skip(f"{config_path} not available in this checkout")
-
-    from pommes.io.build_input_dataset import read_config_file
-
-    config = read_config_file(file_path=str(config_path))
-    declared = set(config["input"]["parameters"].keys())
-    assert not any("retrofit" in name for name in declared)
-
-
 def test_no_technology_name_appears_in_the_retrofit_package():
     """
     The old retrofit.py hardcoded conversion_tech="smr_ccs". Nothing in

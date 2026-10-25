@@ -5,7 +5,7 @@ pommes-kul convention: demand, flexdem demand and the adequacy balance are energ
 blocks reaches the optimum of the 1 h model whose data are constant over the same blocks. Windows
 (flexdem conservation, daily production limit) must be counted in hours, not in time steps.
 
-Model: the synthetic 3-area benchmark (benchmarks/dataset_nnodes.py) over two weeks, with flexible
+Model: the synthetic 3-area dataset (pommes/tests/dataset_nnodes.py) over two weeks, with flexible
 heat (24 h windows), a daily production limit on the OCGT, and no storage dissipation (so that a
 3 h step and three identical 1 h steps are exactly the same storage dynamics). Its capacities are
 built (end of life aligned with the decommissioning years): the tests assert it.
@@ -15,23 +15,16 @@ step duration and their costs are per MWh of the energy shed or spilled.
 """
 import numpy as np
 import pytest
-import xarray as xr
 
 from pommes.model.build_model import build_model
+from pommes.tests.dataset_nnodes import build_nnode_parameters
 from pommes.tests.test_flexdem import N_HOURS, _to_steps, _with_defaults, _with_flexdem
-from dataset_nnodes import build_nnode_parameters  # noqa: E402  (path set by test_flexdem)
 
 STEP = 3
 
 
 def _instance():
     ds = _with_flexdem(build_nnode_parameters(n_areas=3, n_hours=N_HOURS))
-    # The benchmark's end of life (investment year + 25 or 15..40 years) matches none of its
-    # decommissioning years (2030, 2040, 2050), so nothing could be built and every demand was shed.
-    # An investment of 2020 (resp. 2030) ends in 2040 (resp. 2050).
-    for tech in ("conversion", "storage"):
-        eol = ds[f"{tech}_end_of_life"]
-        ds[f"{tech}_end_of_life"] = xr.zeros_like(eol) + ds.year_inv + 20
     ds["storage_dissipation"] = ds.storage_dissipation * 0.0
     daily = np.full((ds.sizes["area"], ds.sizes["conversion_tech"], ds.sizes["year_op"]), np.nan)
     daily[:, list(ds.conversion_tech.values).index("ocgt"), :] = 1500.0  # MWh per day
@@ -57,21 +50,32 @@ def _solve(ds):
     return m
 
 
+def _net_electricity(m, p, dt):
+    """Electricity [MWh] delivered by conversion and storage together, over the whole horizon."""
+    s, elec = m.solution, dict(resource="electricity")
+    conversion = s["operation_conversion_power"] * p.conversion_factor.sel(**elec)
+    storage = (s["operation_storage_power_in"] * p.storage_factor_in.sel(**elec)
+               + s["operation_storage_power_out"] * p.storage_factor_out.sel(**elec))
+    return float(conversion.sum() + storage.sum()) * dt
+
+
 @pytest.fixture(scope="module")
 def ds():
     return _instance()
 
 
 def test_same_optimum_at_1h_and_3h(ds):
-    hourly = _solve(_piecewise_constant(ds, STEP))
-    coarse = _solve(_to_steps(ds, STEP))
+    hourly_p, coarse_p = _piecewise_constant(ds, STEP), _to_steps(ds, STEP)
+    hourly, coarse = _solve(hourly_p), _solve(coarse_p)
     for m in (hourly, coarse):  # the comparison is only meaningful if capacity is built and used
         assert float(m.solution["planning_conversion_power_capacity"].sum()) > 100.0
         assert float(m.solution["planning_storage_power_capacity"].sum()) > 10.0
-    produced = [float(m.solution["operation_conversion_power"].sum()) * dt  # MWh = power x step hours
-                for m, dt in ((hourly, 1), (coarse, STEP))]
+    # MWh = power x step hours. The conversion production alone is not unique: wind and solar cost nothing to run,
+    # so producing more and losing it in the storage cycle costs the same as producing less. What the optimum fixes
+    # is the electricity that conversion and storage deliver together (demand minus shedding and combined output).
+    produced = [_net_electricity(m, p, dt) for m, p, dt in ((hourly, hourly_p, 1), (coarse, coarse_p, STEP))]
     assert produced[0] > 1e4
-    assert produced[1] == pytest.approx(produced[0], rel=1e-3)
+    assert produced[1] == pytest.approx(produced[0], rel=1e-6)
     assert coarse.objective.value == pytest.approx(hourly.objective.value, rel=1e-6)
 
 
@@ -112,7 +116,7 @@ def test_import_emissions_do_not_depend_on_the_step(ds):
     dims = ("area", "hour", "resource", "year_op")
     shape = tuple(d.sizes[k] for k in dims)
     price, ef = np.zeros(shape), np.zeros(shape)
-    price[:, :, res.index("methane"), :] = 40.0
+    price[:, :, res.index("methane"), :] = 5.0  # with the carbon tax (50 x 0.2), below the 20 of shedding (buying) it
     ef[:, :, res.index("methane"), :] = 0.2  # t CO2 per MWh imported
     d["net_import_import_price"] = (dims, price)
     d["net_import_emission_factor"] = (dims, ef)

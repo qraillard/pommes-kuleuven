@@ -1,25 +1,16 @@
 """flexdem: the vectorised window conservation matches the original per-window loop, and handles
 time steps longer than 1 h.
 
-Model: the synthetic 3-area benchmark dataset (benchmarks/dataset_nnodes.py) over two weeks, with
+Model: the synthetic 3-area dataset (pommes/tests/dataset_nnodes.py) over two weeks, with
 its heat demand moved to a flexible demand (24 h window, max load ratio 3, no minimum load).
 """
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-# The synthetic benchmark lives in the sibling pommes-kul checkout (it builds for both engines).
-BENCHMARKS_DIR = Path(__file__).resolve().parents[3] / "pommes-kul" / "benchmarks"
-if not BENCHMARKS_DIR.exists():
-    pytest.skip("sibling pommes-kul/benchmarks not found", allow_module_level=True)
-sys.path.insert(0, str(BENCHMARKS_DIR))
-
-import pommes.model.build_model as build_module  # noqa: E402
-from dataset_nnodes import build_nnode_parameters  # noqa: E402
-from pommes.model.build_model import build_model  # noqa: E402
-from pommes.model.data_validation import ref_inputs  # noqa: E402
+import pommes.model.build_model as build_module
+from pommes.model.build_model import build_model
+from pommes.model.data_validation import ref_inputs
+from pommes.tests.dataset_nnodes import build_nnode_parameters
 
 N_HOURS = 336
 WINDOW = 24
