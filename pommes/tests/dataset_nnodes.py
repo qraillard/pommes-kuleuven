@@ -50,7 +50,38 @@ def _annuity_multiplier(n_dec: int, n_inv: int) -> np.ndarray:
     return mat[:n_dec, 1 : n_inv + 1]
 
 
-def build_nnode_parameters(n_areas: int = 3, n_hours: int = 365) -> xr.Dataset:
+def _replicate(bases: list[str], k: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Names, index in ``bases`` and replica number of ``k`` copies of the technologies ``bases``.
+
+    The first copy keeps the names of ``bases``, the others add ``_<r>``; the order is copy by copy, so that
+    ``k = 1`` gives ``bases`` unchanged.
+    """
+    names = [b if r == 0 else f"{b}_{r}" for r in range(k) for b in bases]
+    base_index = np.tile(np.arange(len(bases)), k)
+    replica = np.repeat(np.arange(k), len(bases))
+    return np.array(names, dtype=str), base_index, replica
+
+
+def _cost_factor(replica: np.ndarray) -> np.ndarray:
+    """Cost factor of copy ``r``: 1, 0.97, 1.03, 0.94, 1.06, ... (the odd copies are cheaper than the original)."""
+    return 1.0 + 0.03 * ((replica + 1) // 2) * np.where(replica % 2 == 1, -1.0, 1.0)
+
+
+def build_nnode_parameters(n_areas: int = 3, n_hours: int = 365, tech_scale: int = 1) -> xr.Dataset:
+    """The synthetic dataset for ``n_areas`` areas and ``n_hours`` hourly steps.
+
+    ``tech_scale`` copies every technology that many times (3 common and 5 restricted conversion technologies, 1
+    common and 2 restricted storage technologies, 2 combined technologies, per copy). A copy of a restricted
+    technology is available in the same areas as the original, so every area has ``tech_scale`` times as many
+    technologies. Each copy has ``1 / tech_scale`` of the capacity maximum of the original, so that the total
+    capacity of a technology does not depend on ``tech_scale``: the economics stay those of the benchmark grid and
+    only the number of technologies grows (with the full capacity on every copy, heat stops being shed from
+    ``tech_scale = 2`` on). The costs of copy ``r`` are those of the original times 1, 0.97, 1.03, 0.94, 1.06, ...
+    (copies with identical data would give alternative optima, and dearer ones would never be used).
+    ``tech_scale = 1`` is the dataset of the benchmark grid.
+    """
+    k = int(tech_scale)
+    assert k >= 1
     area = np.array([f"N{i + 1}" for i in range(n_areas)], dtype=str)
     hour = np.arange(n_hours, dtype="int64")
     resource = np.array(["electricity", "heat", "methane"], dtype=str)
@@ -58,14 +89,20 @@ def build_nnode_parameters(n_areas: int = 3, n_hours: int = 365) -> xr.Dataset:
 
     common_conv = ["wind_onshore", "solar_pv", "ocgt"]
     restricted_conv = ["biomass", "electrolysis", "chp_waste", "hydro_ror", "coal"]
-    conversion_tech = np.array(common_conv + restricted_conv, dtype=str)
+    conv_bases = common_conv + restricted_conv
+    conversion_tech, conv_base, conv_rep = _replicate(conv_bases, k)
+    conv_pert = _cost_factor(conv_rep)
     n_conv = len(conversion_tech)
 
     restricted_storage = ["phs", "h2_tank"]
-    storage_tech = np.array(["battery"] + restricted_storage, dtype=str)
+    storage_bases = ["battery"] + restricted_storage
+    storage_tech, storage_base, storage_rep = _replicate(storage_bases, k)
+    storage_pert = _cost_factor(storage_rep)
     n_storage = len(storage_tech)
 
-    combined_tech = np.array(["chp_gas", "chp_biomass"], dtype=str)
+    combined_bases = ["chp_gas", "chp_biomass"]
+    combined_tech, combined_base, combined_rep = _replicate(combined_bases, k)
+    combined_pert = _cost_factor(combined_rep)
     n_combined = len(combined_tech)
 
     year_dec = np.array([2030, 2040, 2050], dtype="int64")
@@ -135,14 +172,15 @@ def build_nnode_parameters(n_areas: int = 3, n_hours: int = 365) -> xr.Dataset:
     cap_max = np.zeros((n_areas, n_conv))
     cap_min = np.zeros((n_areas, n_conv))
     common_cap = {"wind_onshore": 150.0, "solar_pv": 120.0, "ocgt": 200.0}
-    for ti, tech in enumerate(conversion_tech):
+    for ti in range(n_conv):
+        tech = conv_bases[conv_base[ti]]
         if tech in common_cap:
-            cap_max[:, ti] = common_cap[tech]
+            cap_max[:, ti] = common_cap[tech] / k
         else:
             ri = restricted_conv.index(tech)
             for ai in range(n_areas):
                 if ai % len(restricted_conv) == ri:
-                    cap_max[ai, ti] = 100.0
+                    cap_max[ai, ti] = 100.0 / k
     ds["conversion_power_capacity_max"] = (("area", "conversion_tech"), cap_max)
     ds["conversion_power_capacity_min"] = (("area", "conversion_tech"), cap_min)
 
@@ -181,19 +219,19 @@ def build_nnode_parameters(n_areas: int = 3, n_hours: int = 365) -> xr.Dataset:
                        "electrolysis": 0, "chp_waste": 0.1, "hydro_ror": 0, "coal": 0.9}
     ds["conversion_variable_cost"] = (
         "conversion_tech",
-        np.array([var_cost[t] for t in conversion_tech], dtype="float64"),
+        np.array([var_cost[conv_bases[b]] for b in conv_base], dtype="float64") * conv_pert,
     )
     ds["conversion_fixed_cost"] = (
         "conversion_tech",
-        np.array([fixed_cost[t] for t in conversion_tech], dtype="float64"),
+        np.array([fixed_cost[conv_bases[b]] for b in conv_base], dtype="float64") * conv_pert,
     )
     ds["conversion_invest_cost"] = (
         "conversion_tech",
-        np.array([invest_cost[t] for t in conversion_tech], dtype="float64"),
+        np.array([invest_cost[conv_bases[b]] for b in conv_base], dtype="float64") * conv_pert,
     )
     ds["conversion_emission_factor"] = (
         "conversion_tech",
-        np.array([emission_factor[t] for t in conversion_tech], dtype="float64"),
+        np.array([emission_factor[conv_bases[b]] for b in conv_base], dtype="float64"),
     )
 
     conv_factor = np.zeros((n_conv, 3))
@@ -204,8 +242,8 @@ def build_nnode_parameters(n_areas: int = 3, n_hours: int = 365) -> xr.Dataset:
     solar = np.clip(np.sin(2 * np.pi * hr / 24 - np.pi / 2), 0, None)
     wind = 0.35 + 0.3 * np.sin(2 * np.pi * hr / 60) + 0.1 * np.sin(2 * np.pi * hr / 11)
     wind = np.clip(wind, 0.02, 0.95)
-    conv_avail[list(conversion_tech).index("wind_onshore")] = wind
-    conv_avail[list(conversion_tech).index("solar_pv")] = solar
+    conv_avail[conv_base == conv_bases.index("wind_onshore")] = wind
+    conv_avail[conv_base == conv_bases.index("solar_pv")] = solar
     ds["conversion_availability"] = (("conversion_tech", "hour"), conv_avail)
 
     ds["conversion_end_of_life"] = (
@@ -226,16 +264,17 @@ def build_nnode_parameters(n_areas: int = 3, n_hours: int = 365) -> xr.Dataset:
     p_inv_min = np.zeros((n_areas, n_storage, n_inv))
     e_inv_max = np.zeros((n_areas, n_storage, n_inv))
     e_inv_min = np.zeros((n_areas, n_storage, n_inv))
-    for ti, tech in enumerate(storage_tech):
+    for ti in range(n_storage):
+        tech = storage_bases[storage_base[ti]]
         if tech == "battery":
-            p_inv_max[:, ti, :] = 60.0
-            e_inv_max[:, ti, :] = 240.0
+            p_inv_max[:, ti, :] = 60.0 / k
+            e_inv_max[:, ti, :] = 240.0 / k
         else:
             ri = restricted_storage.index(tech)
             for ai in range(n_areas):
                 if ai % len(restricted_storage) == ri:
-                    p_inv_max[ai, ti, :] = 80.0
-                    e_inv_max[ai, ti, :] = 500.0
+                    p_inv_max[ai, ti, :] = 80.0 / k
+                    e_inv_max[ai, ti, :] = 500.0 / k
     ds["storage_power_capacity_investment_max"] = (
         ("area", "storage_tech", "year_inv"),
         p_inv_max,
@@ -262,14 +301,14 @@ def build_nnode_parameters(n_areas: int = 3, n_hours: int = 365) -> xr.Dataset:
     ds["storage_annuity_perfect_foresight"] = np.array(False)
     ds["storage_finance_rate"] = ("storage_tech", np.full(n_storage, 0.05))
     ds["storage_life_span"] = ("storage_tech", np.full(n_storage, LIFE_SPAN))
-    ds["storage_fixed_cost_power"] = ("storage_tech", np.array([5.0, 8.0, 4.0]))
-    ds["storage_fixed_cost_energy"] = ("storage_tech", np.array([2.0, 1.0, 3.0]))
-    ds["storage_invest_cost_power"] = ("storage_tech", np.array([300.0, 900.0, 400.0]))
-    ds["storage_invest_cost_energy"] = ("storage_tech", np.array([150.0, 60.0, 250.0]))
-    ds["storage_dissipation"] = ("storage_tech", np.array([0.02, 0.0, 0.05]))
+    ds["storage_fixed_cost_power"] = ("storage_tech", np.array([5.0, 8.0, 4.0])[storage_base] * storage_pert)
+    ds["storage_fixed_cost_energy"] = ("storage_tech", np.array([2.0, 1.0, 3.0])[storage_base] * storage_pert)
+    ds["storage_invest_cost_power"] = ("storage_tech", np.array([300.0, 900.0, 400.0])[storage_base] * storage_pert)
+    ds["storage_invest_cost_energy"] = ("storage_tech", np.array([150.0, 60.0, 250.0])[storage_base] * storage_pert)
+    ds["storage_dissipation"] = ("storage_tech", np.array([0.02, 0.0, 0.05])[storage_base])
     ds["storage_main_resource"] = (
         "storage_tech",
-        np.array(["electricity", "electricity", "hydrogen"], dtype=str),
+        np.array(["electricity", "electricity", "hydrogen"], dtype=str)[storage_base],
     )
     ds["storage_charge_ramp"] = ("storage_tech", np.full(n_storage, np.nan))
     ds["storage_discharge_ramp"] = ("storage_tech", np.full(n_storage, np.nan))
@@ -279,7 +318,8 @@ def build_nnode_parameters(n_areas: int = 3, n_hours: int = 365) -> xr.Dataset:
     factor_keep = np.zeros((n_storage, 3))
     eff_in = {"battery": -1.05, "phs": -1.1, "h2_tank": -1.3}
     eff_out = {"battery": 0.95, "phs": 0.85, "h2_tank": 0.6}
-    for ti, tech in enumerate(storage_tech):
+    for ti in range(n_storage):
+        tech = storage_bases[storage_base[ti]]
         factor_in[ti, 0] = eff_in[tech]
         factor_out[ti, 0] = eff_out[tech]
     ds["storage_factor_in"] = (("storage_tech", "resource"), factor_in)
@@ -309,8 +349,8 @@ def build_nnode_parameters(n_areas: int = 3, n_hours: int = 365) -> xr.Dataset:
     comb_cap_min = np.zeros((n_areas, n_combined))
     for ti in range(n_combined):
         for ai in range(n_areas):
-            if ai % n_combined == ti:
-                comb_cap_max[ai, ti] = 90.0
+            if ai % len(combined_bases) == combined_base[ti]:
+                comb_cap_max[ai, ti] = 90.0 / k
     ds["combined_power_capacity_max"] = (("area", "combined_tech"), comb_cap_max)
     ds["combined_power_capacity_min"] = (("area", "combined_tech"), comb_cap_min)
 
@@ -325,9 +365,9 @@ def build_nnode_parameters(n_areas: int = 3, n_hours: int = 365) -> xr.Dataset:
     ds["combined_mode_ramp_down"] = np.array(np.nan)
     ds["combined_finance_rate"] = ("combined_tech", np.full(n_combined, 0.05))
     ds["combined_life_span"] = ("combined_tech", np.full(n_combined, LIFE_SPAN))
-    ds["combined_variable_cost"] = ("combined_tech", np.array([15.0, 22.0]))
-    ds["combined_fixed_cost"] = ("combined_tech", np.array([18.0, 24.0]))
-    ds["combined_invest_cost"] = ("combined_tech", np.array([1400.0, 1900.0]))
+    ds["combined_variable_cost"] = ("combined_tech", np.array([15.0, 22.0])[combined_base] * combined_pert)
+    ds["combined_fixed_cost"] = ("combined_tech", np.array([18.0, 24.0])[combined_base] * combined_pert)
+    ds["combined_invest_cost"] = ("combined_tech", np.array([1400.0, 1900.0])[combined_base] * combined_pert)
     ds["combined_power_capacity_investment_max"] = (
         "combined_tech",
         np.full(n_combined, np.nan),
@@ -338,7 +378,7 @@ def build_nnode_parameters(n_areas: int = 3, n_hours: int = 365) -> xr.Dataset:
     )
     ds["combined_emission_factor"] = (
         ("combined_tech", "mode"),
-        np.array([[0.35, 0.35], [0.05, 0.05]]),
+        np.array([[0.35, 0.35], [0.05, 0.05]])[combined_base],
     )
     combined_factor = np.zeros((n_combined, 2, 3))
     combined_factor[:, 0, 0] = 1.0
@@ -368,7 +408,7 @@ def build_nnode_parameters(n_areas: int = 3, n_hours: int = 365) -> xr.Dataset:
 
 
 if __name__ == "__main__":
-    ds = build_nnode_parameters(n_areas=7, n_hours=8760)
+    ds = build_nnode_parameters(n_areas=7, n_hours=8760, tech_scale=1)
     print(ds)
     print()
     print("sizes:", dict(ds.sizes))
