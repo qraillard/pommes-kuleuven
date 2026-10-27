@@ -13,9 +13,11 @@ What is checked, with the ``test_case`` example (all life spans 20 years, early 
   window at least as long, so an optimum that is at most as high;
 - a parameter indexed by ``year_dec`` cannot be read when ``year_dec`` is not listed;
 - a retrofit study (the ``parameters_retrofit_conversion`` fixture) builds on the derived grid, which holds ``year_ret``;
+- ``check_inputs`` warns where a hand-written ``*_end_of_life`` is not in ``year_dec`` (and only there);
 - the dataset of a derived study passes ``check_inputs``.
 """
 import copy
+import logging
 
 import numpy as np
 import pandas as pd
@@ -155,3 +157,39 @@ def test_a_retrofit_study_builds_on_the_derived_grid(parameters_retrofit_convers
         return int((model.variables["planning_conversion_power_capacity"].labels.values >= 0).sum())
 
     assert capacity_variables(derived) > capacity_variables(listed)
+
+
+def _off_grid_warnings(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records if "end of life that is not in year_dec" in r.getMessage()]
+
+
+def test_check_inputs_is_silent_on_a_study_built_by_the_pipeline(caplog):
+    for drop_year_dec in (False, True):
+        p = build_input_parameters(_config("full_life", drop_year_dec))
+        with caplog.at_level(logging.WARNING):
+            check_inputs(p)
+        assert _off_grid_warnings(caplog) == []
+
+
+def test_check_inputs_warns_where_a_hand_written_end_of_life_is_not_a_year_dec(caplog):
+    p = build_input_parameters(_config("full_life", drop_year_dec=False))
+    off = p.conversion_end_of_life.copy(deep=True)
+    off[{"conversion_tech": 0, "year_inv": 0}] = 2045  # year_dec: 2020, 2030, ..., 2070
+    p["conversion_end_of_life"] = off
+    with caplog.at_level(logging.WARNING):
+        check_inputs(p)
+    (message,) = _off_grid_warnings(caplog)
+    assert message.startswith("conversion_end_of_life: 1 of ")
+    assert "2045" in message
+    assert "storage_end_of_life" not in message
+
+
+def test_check_inputs_does_not_count_an_end_of_life_without_a_life_span(caplog):
+    p = build_input_parameters(_config("full_life", drop_year_dec=False))
+    p["conversion_life_span"] = p.conversion_life_span.where(p.conversion_tech != p.conversion_tech[0])  # NaN
+    off = p.conversion_end_of_life.copy(deep=True)
+    off[{"conversion_tech": 0}] = 2045
+    p["conversion_end_of_life"] = off
+    with caplog.at_level(logging.WARNING):
+        check_inputs(p)
+    assert _off_grid_warnings(caplog) == []

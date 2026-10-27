@@ -9,6 +9,55 @@ from xarray import Dataset
 from pommes.model.annuity import infer_annuity_full_life
 from pommes.model.data_validation import ref_inputs
 
+logger = logging.getLogger(__name__)
+
+
+def _warn_end_of_life_off_year_dec(ds: Dataset) -> None:
+    """
+    Warn where an end of life is not a decommissioning year.
+
+    Without early decommissioning, a vintage has a capacity variable only at
+    ``year_dec == *_end_of_life``. An end of life that is not in ``year_dec``
+    leaves the vintage without any variable: it cannot be built, and an
+    investment minimum on it is dropped without a message. A dataset built by
+    ``build_input_parameters`` never has one (``compute_end_of_life`` rounds
+    down onto ``year_dec``, and a study without ``year_dec`` gets a grid that
+    holds the ends of life), but a dataset written by hand can. Entries whose
+    life span is NaN or not positive hold no capacity and are not counted.
+    One warning per ``*_end_of_life`` variable, with the number of entries and
+    one example.
+
+    Args:
+        ds (xarray.Dataset): Dataset with its ``year_dec`` coordinate.
+    """
+    if "year_dec" not in ds.coords:
+        return
+    for name in ds.data_vars:
+        if not str(name).endswith("_end_of_life"):
+            continue
+        end = ds[name]
+        life_span = str(name).replace("end_of_life", "life_span")
+        held = end.notnull() if life_span not in ds else ds[life_span] > 0
+        off = held & ~end.isin(ds.year_dec)
+        count = int(off.sum())
+        if not count:
+            continue
+        first = tuple(np.argwhere(off.values)[0])
+        example = {
+            dim: (off[dim].values[i].item() if dim in off.coords else i)
+            for dim, i in zip(off.dims, first)
+        }
+        value = end.broadcast_like(off).transpose(*off.dims).values[first]
+        logger.warning(
+            f"{name}: {count} of {int(held.broadcast_like(off).sum())} entries "
+            f"have an end of life that is not in year_dec (for example "
+            f"{example}: {value.item()}). Without early "
+            f"decommissioning such a vintage has no capacity variable, so it "
+            f"cannot be built and an investment minimum on it is ignored. Put "
+            f"the end of life in year_dec, or leave year_dec out of the "
+            f"study's coords (it is then derived from the life spans)."
+        )
+
 
 def check_inputs(ds: Dataset) -> Dataset:
     """
@@ -135,5 +184,7 @@ def check_inputs(ds: Dataset) -> Dataset:
             f"Max year_inv: {int(ds.year_inv.max())}, "
             f"Max year_dec: {int(ds.year_dec.max())}"
         )
+
+    _warn_end_of_life_off_year_dec(ds)
 
     return ds
