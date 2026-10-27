@@ -146,6 +146,11 @@ configuration chooses the convention with ``pre_process: annuity_mode``:
   :math:`i + L`. A ``year_dec`` that is listed is used as it is, as before (a
   finer grid, for example yearly, also removes the gap). A parameter read from
   a file cannot be indexed by ``year_dec`` when ``year_dec`` is not listed.
+  A dataset written by hand whose ``*_end_of_life`` is not in ``year_dec`` (its
+  vintage would have no capacity variable) is completed by ``check_inputs``
+  when the annuities are full life: the missing years are added to
+  ``year_dec``, with a warning. With ``until_decommissioning`` the annuity
+  tables depend on ``year_dec``, so ``check_inputs`` only warns.
 - ``until_decommissioning``: the previous behaviour, as in the equations
   above, with annuities that depend on the decommissioning year :math:`d`.
 

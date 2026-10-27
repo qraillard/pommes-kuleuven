@@ -12,9 +12,9 @@ from pommes.model.data_validation import ref_inputs
 logger = logging.getLogger(__name__)
 
 
-def _warn_end_of_life_off_year_dec(ds: Dataset) -> None:
+def _complete_year_dec_with_ends_of_life(ds: Dataset) -> Dataset:
     """
-    Warn where an end of life is not a decommissioning year.
+    Make every end of life a decommissioning year, or warn where that is unsafe.
 
     Without early decommissioning, a vintage has a capacity variable only at
     ``year_dec == *_end_of_life``. An end of life that is not in ``year_dec``
@@ -24,14 +24,27 @@ def _warn_end_of_life_off_year_dec(ds: Dataset) -> None:
     down onto ``year_dec``, and a study without ``year_dec`` gets a grid that
     holds the ends of life), but a dataset written by hand can. Entries whose
     life span is NaN or not positive hold no capacity and are not counted.
-    One warning per ``*_end_of_life`` variable, with the number of entries and
-    one example.
+
+    With full life annuities (``annuity_full_life``), the annuity of a vintage
+    does not depend on ``year_dec``, so the missing ends of life are added to
+    ``year_dec`` (one warning lists them). With the previous convention the
+    annuity tables are indexed by ``year_dec`` and nothing can say what the
+    new rows cost, which the model would read as no cost: the dataset is left
+    as it is and one warning per ``*_end_of_life`` variable says so.
 
     Args:
-        ds (xarray.Dataset): Dataset with its ``year_dec`` coordinate.
+        ds (xarray.Dataset): Dataset with its ``year_dec`` coordinate and, if
+            it has one, ``annuity_full_life``.
+
+    Returns:
+        xarray.Dataset: The dataset, with the ends of life added to ``year_dec``
+            where that is safe.
     """
     if "year_dec" not in ds.coords:
-        return
+        return ds
+    full_life = bool(ds["annuity_full_life"]) if "annuity_full_life" in ds else False
+    missing: set[int] = set()
+    found: list[tuple[str, int, int, dict, object]] = []
     for name in ds.data_vars:
         if not str(name).endswith("_end_of_life"):
             continue
@@ -47,16 +60,41 @@ def _warn_end_of_life_off_year_dec(ds: Dataset) -> None:
             dim: (off[dim].values[i].item() if dim in off.coords else i)
             for dim, i in zip(off.dims, first)
         }
-        value = end.broadcast_like(off).transpose(*off.dims).values[first]
-        logger.warning(
-            f"{name}: {count} of {int(held.broadcast_like(off).sum())} entries "
-            f"have an end of life that is not in year_dec (for example "
-            f"{example}: {value.item()}). Without early "
-            f"decommissioning such a vintage has no capacity variable, so it "
-            f"cannot be built and an investment minimum on it is ignored. Put "
-            f"the end of life in year_dec, or leave year_dec out of the "
-            f"study's coords (it is then derived from the life spans)."
+        broadcast = end.broadcast_like(off).transpose(*off.dims)
+        missing.update(int(year) for year in np.unique(broadcast.where(off).values[off.values]))
+        found.append(
+            (str(name), count, int(held.broadcast_like(off).sum()), example, broadcast.values[first].item())
         )
+    if not found:
+        return ds
+
+    if full_life:
+        years = sorted(missing)
+        logger.warning(
+            f"year_dec completed with {years}: the end of life of "
+            + ", ".join(f"{name} ({count} entries)" for name, count, *_ in found)
+            + " was not a decommissioning year, so such a vintage had no "
+            "capacity variable (it could not be built, and an investment "
+            "minimum on it was ignored). Add these years to year_dec, or "
+            "leave year_dec out of the study's coords (it is then derived "
+            "from the life spans), to silence this warning."
+        )
+        return ds.reindex(year_dec=np.union1d(ds.year_dec.values, years).astype("int64"))
+
+    why = (
+        "year_dec is not completed: the annuity tables of the previous "
+        "convention depend on year_dec and the new rows would cost nothing"
+    )
+    for name, count, total, example, value in found:
+        logger.warning(
+            f"{name}: {count} of {total} entries have an end of life that is "
+            f"not in year_dec (for example {example}: {value}). Without early "
+            f"decommissioning such a vintage has no capacity variable, so it "
+            f"cannot be built and an investment minimum on it is ignored; "
+            f"{why}. Put the end of life in year_dec, or leave year_dec out "
+            f"of the study's coords (it is then derived from the life spans)."
+        )
+    return ds
 
 
 def check_inputs(ds: Dataset) -> Dataset:
@@ -185,6 +223,4 @@ def check_inputs(ds: Dataset) -> Dataset:
             f"Max year_dec: {int(ds.year_dec.max())}"
         )
 
-    _warn_end_of_life_off_year_dec(ds)
-
-    return ds
+    return _complete_year_dec_with_ends_of_life(ds)

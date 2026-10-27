@@ -13,7 +13,8 @@ What is checked, with the ``test_case`` example (all life spans 20 years, early 
   window at least as long, so an optimum that is at most as high;
 - a parameter indexed by ``year_dec`` cannot be read when ``year_dec`` is not listed;
 - a retrofit study (the ``parameters_retrofit_conversion`` fixture) builds on the derived grid, which holds ``year_ret``;
-- ``check_inputs`` warns where a hand-written ``*_end_of_life`` is not in ``year_dec`` (and only there);
+- ``check_inputs`` completes ``year_dec`` with a hand-written ``*_end_of_life`` that is not in it when the annuities are
+  full life, warns without completing with the previous convention, and does neither on a study built by the pipeline;
 - the dataset of a derived study passes ``check_inputs``.
 """
 import copy
@@ -159,29 +160,63 @@ def test_a_retrofit_study_builds_on_the_derived_grid(parameters_retrofit_convers
     assert capacity_variables(derived) > capacity_variables(listed)
 
 
-def _off_grid_warnings(caplog) -> list[str]:
-    return [r.getMessage() for r in caplog.records if "end of life that is not in year_dec" in r.getMessage()]
+def _warnings(caplog, text: str) -> list[str]:
+    return [r.getMessage() for r in caplog.records if text in r.getMessage()]
+
+
+def _with_one_end_of_life_off_the_grid(annuity_mode: str) -> xr.Dataset:
+    p = build_input_parameters(_config(annuity_mode, drop_year_dec=False))
+    off = p.conversion_end_of_life.copy(deep=True)
+    off[{"conversion_tech": 0, "year_inv": 0}] = 2045  # year_dec: 2020, 2030, ..., 2070
+    p["conversion_end_of_life"] = off
+    return p
+
+
+def _capacity_variables(p: xr.Dataset) -> int:
+    model = build_model(check_inputs(p))
+    return int((model.variables["planning_conversion_power_capacity"].labels.values >= 0).sum())
 
 
 def test_check_inputs_is_silent_on_a_study_built_by_the_pipeline(caplog):
     for drop_year_dec in (False, True):
         p = build_input_parameters(_config("full_life", drop_year_dec))
         with caplog.at_level(logging.WARNING):
-            check_inputs(p)
-        assert _off_grid_warnings(caplog) == []
+            checked = check_inputs(p)
+        assert _warnings(caplog, "year_dec completed") == []
+        assert _warnings(caplog, "end of life that is not in year_dec") == []
+        xr.testing.assert_equal(checked.year_dec, p.year_dec)
 
 
-def test_check_inputs_warns_where_a_hand_written_end_of_life_is_not_a_year_dec(caplog):
-    p = build_input_parameters(_config("full_life", drop_year_dec=False))
-    off = p.conversion_end_of_life.copy(deep=True)
-    off[{"conversion_tech": 0, "year_inv": 0}] = 2045  # year_dec: 2020, 2030, ..., 2070
-    p["conversion_end_of_life"] = off
+def test_check_inputs_completes_year_dec_with_an_end_of_life_off_the_grid_in_full_life(caplog):
+    p = _with_one_end_of_life_off_the_grid("full_life")
+    on_the_grid = _capacity_variables(build_input_parameters(_config("full_life", drop_year_dec=False)))
+    caplog.clear()
     with caplog.at_level(logging.WARNING):
-        check_inputs(p)
-    (message,) = _off_grid_warnings(caplog)
-    assert message.startswith("conversion_end_of_life: 1 of ")
-    assert "2045" in message
-    assert "storage_end_of_life" not in message
+        checked = check_inputs(p)
+    (message,) = _warnings(caplog, "year_dec completed")
+    assert "[2045]" in message and "conversion_end_of_life (1 entries)" in message
+    assert checked.year_dec.values.tolist() == sorted([*p.year_dec.values.tolist(), 2045])
+    assert checked.year_dec.dtype == np.int64
+    assert _capacity_variables(checked) == on_the_grid  # the vintage can be built, at its end of life 2045
+    # the second pass has nothing left to complete
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        check_inputs(checked)
+    assert _warnings(caplog, "year_dec completed") == []
+
+
+def test_check_inputs_does_not_complete_year_dec_with_the_previous_convention(caplog):
+    p = _with_one_end_of_life_off_the_grid("until_decommissioning")
+    with caplog.at_level(logging.WARNING):
+        checked = check_inputs(p)
+    (message,) = _warnings(caplog, "end of life that is not in year_dec")
+    assert message.startswith("conversion_end_of_life: 1 of ") and "2045" in message
+    assert "year_dec is not completed" in message and "annuity tables" in message
+    assert _warnings(caplog, "year_dec completed") == []
+    xr.testing.assert_equal(checked.year_dec, p.year_dec)
+    # the vintage whose end of life is off the grid has no capacity variable (in each area): fewer than on the grid
+    on_the_grid = _capacity_variables(build_input_parameters(_config("until_decommissioning", drop_year_dec=False)))
+    assert _capacity_variables(p) < on_the_grid
 
 
 def test_check_inputs_does_not_count_an_end_of_life_without_a_life_span(caplog):
@@ -191,5 +226,7 @@ def test_check_inputs_does_not_count_an_end_of_life_without_a_life_span(caplog):
     off[{"conversion_tech": 0}] = 2045
     p["conversion_end_of_life"] = off
     with caplog.at_level(logging.WARNING):
-        check_inputs(p)
-    assert _off_grid_warnings(caplog) == []
+        checked = check_inputs(p)
+    assert _warnings(caplog, "year_dec completed") == []
+    assert _warnings(caplog, "end of life that is not in year_dec") == []
+    xr.testing.assert_equal(checked.year_dec, p.year_dec)
