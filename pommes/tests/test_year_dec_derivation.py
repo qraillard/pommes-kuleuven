@@ -57,15 +57,17 @@ def test_the_grid_of_a_small_dataset():
     ds = xr.Dataset(
         coords={
             "year_inv": np.array([2020, 2030]),
-            "year_op": np.array([2030]),
-            "year_ret": np.array([2030]),
+            "year_op": np.array([2033]),
+            "year_ret": np.array([2025]),
         }
     )
-    ds["conversion_life_span"] = ("conversion_tech", [25.0, np.nan, 0.0, 12.5])
+    ds["conversion_life_span"] = ("conversion_tech", [25.0, np.nan, 0.0, 12.5, -7.0])
     ds["retrofit_conversion_life_span"] = ("retrofit_tech", [10.0])
     grid = derive_year_dec(ds)
-    # 2020/2030 + 25 = 2045/2055; + 12.5 = 2032.5/2042.5 -> 2032/2042; retrofit from year_ret: 2030 + 10 = 2040
-    assert grid.tolist() == [2020, 2030, 2032, 2040, 2042, 2045, 2055]
+    # year_inv 2020, 2030; year_op 2033; year_ret 2025; the ends: 2020/2030 + 25 = 2045/2055, + 12.5 = 2032.5/2042.5
+    # -> 2032/2042 (rounded down); retrofit from year_ret: 2025 + 10 = 2035. Each source holds a year of its own, and the
+    # life spans that are 0 or -7 (2020/2030 and 2013/2023 if they were kept) and NaN give none.
+    assert grid.tolist() == [2020, 2025, 2030, 2032, 2033, 2035, 2042, 2045, 2055]
     assert grid.dtype == np.int64
     assert set(ds.year_ret.values) <= set(grid)  # a retrofit needs year_ret among the decommissioning years
 
