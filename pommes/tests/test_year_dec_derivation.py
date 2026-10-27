@@ -12,6 +12,7 @@ What is checked, with the ``test_case`` example (all life spans 20 years, early 
 - an end of life off the listed grid is rounded down there and exact on the derived grid, where it gives a capacity
   window at least as long, so an optimum that is at most as high;
 - a parameter indexed by ``year_dec`` cannot be read when ``year_dec`` is not listed;
+- a retrofit study (the ``parameters_retrofit_conversion`` fixture) builds on the derived grid, which holds ``year_ret``;
 - the dataset of a derived study passes ``check_inputs``.
 """
 import copy
@@ -126,3 +127,31 @@ def test_a_parameter_indexed_by_year_dec_needs_year_dec():
     }
     with pytest.raises(ValueError, match="year_dec"):
         build_input_parameters(config, dict_df)
+
+
+def test_a_retrofit_study_builds_on_the_derived_grid(parameters_retrofit_conversion):
+    """The retrofit module needs year_ret among year_inv and year_dec (``_check_year_ret_grid``); the derived grid has it.
+
+    The fixture lists year_dec 2030, 2040, 2050 while its ends of life reach 2060 (the vintage of 2040 lives 20 years):
+    that vintage has no capacity variable on the listed grid, and has one on the derived grid, which holds 2060.
+    """
+    listed = parameters_retrofit_conversion.sel(
+        conversion_tech=["smr", "smr_ccs"],
+        area=["area_1"],
+        hour=[0],
+        resource=["electricity", "hydrogen", "methane"],
+        year_dec=[2030, 2040, 2050],
+        year_inv=[2020, 2030, 2040],
+        year_op=[2020, 2030],
+        year_ret=[2030, 2040],
+    ).copy(deep=True)
+    grid = derive_year_dec(listed)
+    assert {2030, 2040}.issubset(grid)  # year_ret
+    assert {2040, 2050, 2060}.issubset(grid)  # the ends of life of the fixture
+    derived = listed.reindex(year_dec=grid)
+
+    def capacity_variables(p):
+        model = build_model(p)  # raises if year_ret is not a subset of year_inv and year_dec
+        return int((model.variables["planning_conversion_power_capacity"].labels.values >= 0).sum())
+
+    assert capacity_variables(derived) > capacity_variables(listed)
