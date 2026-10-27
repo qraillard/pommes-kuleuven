@@ -137,7 +137,15 @@ configuration chooses the convention with ``pre_process: annuity_mode``:
   :math:`i + L`, while the annuity runs over the whole life span: when
   :math:`i + L` is not a decommissioning year, the operation years in between
   pay an annuity for capacity that is gone (a warning lists the affected
-  entries); a finer ``year_dec`` grid, for example yearly, removes the gap.
+  entries). The gap does not exist when ``year_dec`` is not listed in the
+  ``coords`` of the study configuration: the grid is then derived from the data
+  (``derive_year_dec``) as the sorted union of every ``year_inv + life_span``
+  (``year_ret + life_span`` for a retrofit; a fractional end of life is rounded
+  down to a whole year), ``year_inv``, ``year_op`` and ``year_ret``, so every
+  end of life is a decommissioning year and the capacity ends exactly at
+  :math:`i + L`. A ``year_dec`` that is listed is used as it is, as before (a
+  finer grid, for example yearly, also removes the gap). A parameter read from
+  a file cannot be indexed by ``year_dec`` when ``year_dec`` is not listed.
 - ``until_decommissioning``: the previous behaviour, as in the equations
   above, with annuities that depend on the decommissioning year :math:`d`.
 

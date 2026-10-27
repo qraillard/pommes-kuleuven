@@ -28,7 +28,7 @@ Indices and Index Sets
 
     * - :math:`d \in \mathcal{Y}^{dec}`
       - ``year_dec``
-      - Decommissioning years
+      - Decommissioning years (optional in the study coords: derived from the life spans when absent)
 
     * - :math:`t \in \mathcal{T}`
       - ``hour``

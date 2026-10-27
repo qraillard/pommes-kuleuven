@@ -42,6 +42,7 @@ coords:  # alphabetical order, as it is done when converting xarray objects to p
     type: str
     values: ["battery", "tank_hydrogen", "tank_methane"]
 
+  # year_dec is optional: when it is not listed here, it is derived from the life spans (derive_year_dec).
   year_dec:
     type: int64
     values: [2020, 2030, 2040, 2050, 2060, 2070]

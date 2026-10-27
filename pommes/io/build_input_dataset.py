@@ -157,6 +157,59 @@ def compute_end_of_life(ds: xr.Dataset) -> xr.Dataset:
     return ds
 
 
+def derive_year_dec(ds: xr.Dataset) -> np.ndarray:
+    """
+    Decommissioning years of a study that does not list ``year_dec``.
+
+    The grid is the sorted union of
+
+    - the end of every asset, ``year_start + life_span`` for each
+      ``*_life_span`` variable (``year_start`` is ``year_ret`` for a retrofit
+      life span and ``year_inv`` otherwise, as in ``compute_end_of_life``). A
+      life span that is NaN or not positive holds no capacity and is skipped;
+      a fractional end of life is rounded down to a whole year;
+    - ``year_inv``, ``year_op`` and ``year_ret`` when the dataset has them: an
+      asset can be decommissioned early at a decision year, a retrofit needs
+      ``year_ret`` among the decommissioning years, and an operation year is
+      a boundary of the window in which a vintage serves.
+
+    Every end of life is then a decommissioning year, so ``compute_end_of_life``
+    gives the exact end (``year_inv + life_span``) instead of rounding it down to
+    a grid chosen by the user, and ``check_inputs`` finds a grid that is long
+    enough. The grid stays short: at most the number of distinct
+    ``year_start + life_span`` plus the study years.
+
+    Args:
+        ds (xarray.Dataset): Dataset with its coordinates and its life spans,
+            before ``compute_end_of_life``.
+
+    Returns:
+        numpy.ndarray: Sorted unique int64 years.
+    """
+    years = [
+        np.asarray(ds[coord].values, dtype="float64").ravel()
+        for coord in ("year_inv", "year_op", "year_ret")
+        if coord in ds.coords
+    ]
+    for data_var in ds.data_vars:
+        if "life_span" not in data_var:
+            continue
+        if "retrofit" in str(data_var):
+            if "year_ret" not in ds.coords:
+                raise ValueError(
+                    f"{data_var} needs a 'year_ret' coordinate. "
+                    f"Add year_ret to the study's coords."
+                )
+            year_start = ds.year_ret
+        else:
+            year_start = ds.year_inv
+        life_span = ds[data_var]
+        end = (year_start + life_span).where(life_span > 0)
+        years.append(np.asarray(end.values, dtype="float64").ravel())
+    all_years = np.concatenate(years) if years else np.array([])
+    return np.unique(np.floor(all_years[np.isfinite(all_years)])).astype("int64")
+
+
 def build_annuity_rate(
     years_dec_: xr.DataArray,
     years_inv_: xr.DataArray,
@@ -380,8 +433,10 @@ def _warn_off_grid_life_spans(ds: xr.Dataset, active: dict[str, dict]) -> None:
             f"{example}: {end_value:g}, capacity ends at "
             f"{rounded.max() if rounded.size else 'no year_dec'}). With "
             f"annuity_mode full_life the capacity ends at the rounded-down "
-            f"year_dec while the annuity runs the full life span; a finer "
-            f"year_dec grid (for example yearly) removes the gap."
+            f"year_dec while the annuity runs the full life span; leaving "
+            f"year_dec out of the study's coords (it is then derived from "
+            f"the life spans) or a finer year_dec grid (for example "
+            f"yearly) removes the gap."
         )
 
 
@@ -583,6 +638,8 @@ def build_input_parameters(config_: dict[str, Any], dict_df: Optional[dict[str, 
         dict_df = load_inputs_as_dict_of_df(config_)
 
     ds = xr.Dataset(coords=build_coordinates(config_))
+    # A study that does not list year_dec gets it from the life spans below.
+    derive_year_dec_grid = "year_dec" not in config_["coords"]
 
     for module, boolean in config_["add_modules"].items():
         ds = ds.assign({module: boolean})
@@ -590,6 +647,13 @@ def build_input_parameters(config_: dict[str, Any], dict_df: Optional[dict[str, 
     for key, param in parameters.items():
         # print(key,param)
         series = dict_df[param["file"]][param["column"]].astype(param["type"])
+
+        if derive_year_dec_grid and "year_dec" in series.index.names:
+            raise ValueError(
+                f"{key} is indexed by year_dec, but year_dec is not in the "
+                f"study's coords: list year_dec in the config, or index {key} "
+                f"by something else."
+            )
 
         if series.index.names[0] is None:
             da = xr.DataArray(np.array(series[0]))
@@ -607,6 +671,11 @@ def build_input_parameters(config_: dict[str, Any], dict_df: Optional[dict[str, 
         if np.any(da.isnull()):
             da = da.fillna(np.array(param["fill"], dtype=param["type"]))
         ds = ds.assign({key: da})
+
+    if derive_year_dec_grid:
+        ds = ds.assign_coords(
+            year_dec=xr.DataArray(derive_year_dec(ds), dims="year_dec")
+        )
 
     ds = compute_end_of_life(ds)
     ds = compute_annuity_cost(ds, config_)
