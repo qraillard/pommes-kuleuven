@@ -132,3 +132,41 @@ MUST_HAVE_ROWS_IN_A = [
     "operation_combined_net_generation_def",
     "operation_combined_costs_def",
 ]
+
+
+def _zero_factor(ds):
+    ds["combined_factor"] = ds.combined_factor.where(ds.mode != "m1", 0.0)
+
+
+def _zero_aggregate_ramps(ds):
+    ds["combined_ramp_up"] = xr.zeros_like(ds.combined_ramp_up)
+    ds["combined_ramp_down"] = xr.zeros_like(ds.combined_ramp_down)
+    ds["combined_mode_ramp_up"] = xr.full_like(ds.combined_mode_ramp_up, 0.5)
+    ds["combined_mode_ramp_down"] = xr.full_like(ds.combined_mode_ramp_down, 0.5)
+
+
+def _zero_all_ramps(ds):
+    _zero_aggregate_ramps(ds)
+    ds["combined_mode_ramp_up"] = xr.zeros_like(ds.combined_mode_ramp_up)
+    ds["combined_mode_ramp_down"] = xr.zeros_like(ds.combined_mode_ramp_down)
+
+
+@pytest.mark.parametrize(
+    "tweak, name",
+    [
+        (_zero_factor, "operation_combined_power_undefined_mode"),
+        (_zero_aggregate_ramps, "operation_combined_constant_operation_constraint"),
+        (_zero_all_ramps, "operation_combined_mode_constant_operation_constraint"),
+    ],
+)
+def test_an_absent_pair_has_no_row_in_the_rarely_built_constraints(tweak, name):
+    ds = _base()
+    tweak(ds)
+    ds = with_conditions(
+        ds, [1.0, np.nan], demand=[_heat(ds, [6] * 4), _heat(ds, [6] * 4)]
+    )
+    m = build_model(ds)
+    assert name in m.constraints
+    labels = m.constraints[name].labels
+    assert (labels.sel(operating_condition="b") == -1).all()
+    assert (labels.sel(operating_condition="a") != -1).any()
