@@ -169,3 +169,57 @@ def test_sparse_mask_keeps_a_pair_pinned_in_one_condition_only():
     assert float(_energy(m, "ocgt", operating_condition="a")) == pytest.approx(0.0)
     assert float(_energy(m, "ocgt", operating_condition="b")) > 0
     assert _capacity(m, "ocgt") > 0
+
+
+def test_an_absent_pair_has_no_conversion_row():
+    # weights [1, nan]: b is absent, so nothing conversion-related may exist for it
+    ds = _base()
+    for name, value in (
+        ("conversion_max_capacity_factor", 0.8),
+        ("conversion_ramp_up", 0.5),
+        ("conversion_ramp_down", 0.5),
+        ("conversion_must_run", 0.1),
+        ("conversion_max_daily_production", 100.0),
+    ):
+        ds[name] = xr.full_like(ds.conversion_power_capacity_max, value)
+    ds["conversion_max_yearly_production"] = _ceiling(ds, hydro=30.0)
+    ds["conversion_max_yearly_production_expected"] = False
+    ds = with_conditions(ds, [1.0, np.nan])
+    m = build_model(ds)
+    assert_condition_dims_consistent(m)
+    checked = []
+    for container in (m.variables, m.constraints):
+        for name in container:
+            if "conversion" not in name:
+                continue
+            labels = container[name].labels
+            if "operating_condition" not in labels.dims:
+                continue
+            checked.append(name)
+            assert (labels.sel(operating_condition="b") == -1).all(), name
+            if name in MUST_HAVE_ROWS_IN_A:
+                assert (labels.sel(operating_condition="a") != -1).any(), name
+    assert set(MUST_HAVE_ROWS_IN_A) <= set(checked)
+
+    # flag True: the ceiling is on the expectation, one row per year, with no condition dimension
+    ds["conversion_max_yearly_production_expected"] = True
+    m = build_model(ds)
+    labels = m.constraints["operation_conversion_yearly_production_max_constraint"].labels
+    assert "operating_condition" not in labels.dims
+    assert int((labels != -1).sum()) == 1  # hydro, the one pair with a ceiling, in the one year
+
+
+MUST_HAVE_ROWS_IN_A = [
+    "operation_conversion_power",
+    "operation_conversion_net_generation",
+    "operation_conversion_costs",
+    "operation_conversion_power_max_constraint",
+    "operation_conversion_must_run_constraint_inequality",
+    "operation_conversion_ramp_up_constraint",
+    "operation_conversion_ramp_down_constraint",
+    "operation_conversion_yearly_production_max_constraint",
+    "operation_conversion_capacity_factor_max_constraint",
+    "operation_conversion_daily_production_max_constraint",
+    "operation_conversion_net_generation_def",
+    "operation_conversion_costs_def",
+]
