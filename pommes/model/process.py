@@ -9,6 +9,11 @@ from linopy import Constraint, Model
 from xarray import Dataset
 
 from pommes.model.annuity import annuity_full_life, full_life_window
+from pommes.utils import (
+    condition_coords,
+    condition_mask,
+    expected_over_conditions,
+)
 
 
 def add_process(
@@ -178,16 +183,34 @@ def add_process(
     operation_process_power = m.add_variables(
         name="operation_process_power",
         lower=0,
-        coords=[p.area, p.process_tech, p.mode, p.hour, p.year_op],
+        coords=[
+            p.area,
+            p.process_tech,
+            p.mode,
+            p.hour,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(p),
     )
 
     # Operation - process intermediate variables
 
     operation_process_net_generation = m.add_variables(
         name="operation_process_net_generation",
-        coords=[p.area, p.process_tech, p.hour, p.resource, p.year_op],
-        mask=(np.isfinite(p.process_factor) * (p.process_factor != 0)).any(
-            [dim for dim in ["mode"] if dim in p.process_factor.dims]
+        coords=[
+            p.area,
+            p.process_tech,
+            p.hour,
+            p.resource,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(
+            p,
+            (np.isfinite(p.process_factor) * (p.process_factor != 0)).any(
+                [dim for dim in ["mode"] if dim in p.process_factor.dims]
+            ),
         ),
     )
 
@@ -195,7 +218,14 @@ def add_process(
 
     operation_process_state = m.add_variables(
         name="operation_process_state",
-        coords=[p.area, p.process_tech, p.hour, p.year_op],
+        coords=[
+            p.area,
+            p.process_tech,
+            p.hour,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(p),
         # binary=True
         integer=True,
         lower=0
@@ -203,7 +233,14 @@ def add_process(
 
     operation_process_startup= m.add_variables(
         name="operation_process_startup",
-        coords=[p.area, p.process_tech, p.hour, p.year_op],
+        coords=[
+            p.area,
+            p.process_tech,
+            p.hour,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(p),
         # binary=True
         integer=True,
         lower=0
@@ -211,7 +248,14 @@ def add_process(
 
     operation_process_shutdown = m.add_variables(
         name="operation_process_shutdown",
-        coords=[p.area, p.process_tech, p.hour, p.year_op],
+        coords=[
+            p.area,
+            p.process_tech,
+            p.hour,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(p),
         # binary=True
         integer=True,
         lower=0
@@ -248,7 +292,8 @@ def add_process(
 
     operation_process_costs = m.add_variables(
         name="operation_process_costs",
-        coords=[p.area, p.process_tech, p.year_op],
+        coords=[p.area, p.process_tech, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     planning_process_costs = m.add_variables(
@@ -260,8 +305,8 @@ def add_process(
     # Objective function
     # ------------------
 
-    annualised_totex_def.lhs += operation_process_costs.sum(
-        "process_tech"
+    annualised_totex_def.lhs += expected_over_conditions(
+        operation_process_costs.sum("process_tech"), p
     ) + planning_process_costs.sum("process_tech")
 
     # --------------
@@ -281,8 +326,8 @@ def add_process(
         - operation_process_state * p.process_unit_size * p.process_max_load
         <= 0,
         name="operation_process_power_max_constraint",
-        mask=np.isfinite(p.process_unit_size) * (
-                    p.process_unit_size > 0),
+        mask=condition_mask(p, np.isfinite(p.process_unit_size) * (
+                    p.process_unit_size > 0)),
     )
 
     m.add_constraints(
@@ -290,8 +335,8 @@ def add_process(
         - operation_process_power_capacity * p.process_max_load
         <= 0,
         name="operation_process_power_max_constraint_no_unit_size",
-        mask=np.isfinite(p.process_unit_size) * (
-                p.process_unit_size <= 0),
+        mask=condition_mask(p, np.isfinite(p.process_unit_size) * (
+                p.process_unit_size <= 0)),
     )
 
     m.add_constraints(
@@ -299,6 +344,7 @@ def add_process(
         - bigM * operation_process_state
         <= 0,
         name="operation_process_power_max_bigM_constraint", #particularly relevant if no unit size
+        mask=condition_mask(p),
     )
 
     m.add_constraints(
@@ -307,8 +353,8 @@ def add_process(
         >= 0,
 
         name="operation_process_power_min_constraint",
-        mask=np.isfinite(p.process_unit_size) * (
-                p.process_unit_size > 0),
+        mask=condition_mask(p, np.isfinite(p.process_unit_size) * (
+                p.process_unit_size > 0)),
     )
 
     m.add_constraints(
@@ -317,8 +363,8 @@ def add_process(
         >= -bigM,
 
         name="operation_process_power_min_constraint_no_unit_size",
-        mask=np.isfinite(p.process_unit_size) * (
-                p.process_unit_size <= 0),
+        mask=condition_mask(p, np.isfinite(p.process_unit_size) * (
+                p.process_unit_size <= 0)),
     )
 
     # Operation - process unit commitment
@@ -354,7 +400,7 @@ def add_process(
         + p.process_min_load * p.process_unit_size * operation_process_shutdown
         <= 0,
         name="operation_process_ramp_up_constraint",
-        mask=np.isfinite(process_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size)* (p.process_unit_size > 0),
+        mask=condition_mask(p, np.isfinite(process_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size)* (p.process_unit_size > 0)),
     )
 
     m.add_constraints(
@@ -363,7 +409,7 @@ def add_process(
         - startup_capability * p.process_unit_size * operation_process_startup
         <= 0,
         name="operation_process_startup_capability_constraint",
-        mask=np.isfinite(process_ramp_up) * sized,
+        mask=condition_mask(p, np.isfinite(process_ramp_up) * sized),
     )
 
     m.add_constraints(
@@ -372,7 +418,7 @@ def add_process(
         - shutdown_capability * p.process_unit_size * operation_process_shutdown
         <= 0,
         name="operation_process_shutdown_capability_constraint",
-        mask=np.isfinite(process_ramp_down) * (p.hour != p.hour[0]) * sized,
+        mask=condition_mask(p, np.isfinite(process_ramp_down) * (p.hour != p.hour[0]) * sized),
     )
 
     m.add_constraints(
@@ -383,8 +429,8 @@ def add_process(
         - startup_capability * capacity_bound * operation_process_startup
         <= 0,
         name="operation_process_ramp_up_constraint_no_unit_size",
-        mask=np.isfinite(process_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (
-                    p.process_unit_size <= 0),
+        mask=condition_mask(p, np.isfinite(process_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (
+                    p.process_unit_size <= 0)),
     )
 
     m.add_constraints(
@@ -396,7 +442,7 @@ def add_process(
         + p.process_min_load * p.process_unit_size * operation_process_startup
         <= 0,
         name="operation_process_ramp_down_constraint",
-        mask=np.isfinite(process_ramp_down) * (p.hour != p.hour[0])* np.isfinite(p.process_unit_size)* (p.process_unit_size > 0),
+        mask=condition_mask(p, np.isfinite(process_ramp_down) * (p.hour != p.hour[0])* np.isfinite(p.process_unit_size)* (p.process_unit_size > 0)),
     )
 
     m.add_constraints(
@@ -407,8 +453,8 @@ def add_process(
         - shutdown_capability * capacity_bound * operation_process_shutdown
         <= 0,
         name="operation_process_ramp_down_constraint_no_unit_size",
-        mask=np.isfinite(process_ramp_down) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (
-                    p.process_unit_size <= 0),
+        mask=condition_mask(p, np.isfinite(process_ramp_down) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (
+                    p.process_unit_size <= 0)),
     )
 
     # Optional, opt-in: limits how fast the split between modes shifts,
@@ -442,7 +488,7 @@ def add_process(
             - process_mode_ramp_up * p.process_unit_size * operation_process_state
             <= 0,
             name=f"operation_process_mode_ramp_up_constraint_{mode_a}_{mode_b}",
-            mask=np.isfinite(process_mode_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size > 0),
+            mask=condition_mask(p, np.isfinite(process_mode_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size > 0)),
         )
 
         m.add_constraints(
@@ -450,7 +496,7 @@ def add_process(
             - process_mode_ramp_up * operation_process_power_capacity
             <= 0,
             name=f"operation_process_mode_ramp_up_constraint_no_unit_size_{mode_a}_{mode_b}",
-            mask=np.isfinite(process_mode_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size <= 0),
+            mask=condition_mask(p, np.isfinite(process_mode_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size <= 0)),
         )
 
         m.add_constraints(
@@ -458,7 +504,7 @@ def add_process(
             - process_mode_ramp_down * p.process_unit_size * operation_process_state
             <= 0,
             name=f"operation_process_mode_ramp_down_constraint_{mode_a}_{mode_b}",
-            mask=np.isfinite(process_mode_ramp_down) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size > 0),
+            mask=condition_mask(p, np.isfinite(process_mode_ramp_down) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size > 0)),
         )
 
         m.add_constraints(
@@ -466,29 +512,29 @@ def add_process(
             - process_mode_ramp_down * operation_process_power_capacity
             <= 0,
             name=f"operation_process_mode_ramp_down_constraint_no_unit_size_{mode_a}_{mode_b}",
-            mask=np.isfinite(process_mode_ramp_down) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size <= 0),
+            mask=condition_mask(p, np.isfinite(process_mode_ramp_down) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size <= 0)),
         )
 
     m.add_constraints(operation_process_state - operation_process_nb_units <= 0,
-                      name="operation_process_state_nb_units", mask=np.isfinite(p.process_unit_size) * (p.process_unit_size > 0 ) * (p.process_no_shutdown == False))
+                      name="operation_process_state_nb_units", mask=condition_mask(p, np.isfinite(p.process_unit_size) * (p.process_unit_size > 0 ) * (p.process_no_shutdown == False)))
 
     m.add_constraints(operation_process_state - operation_process_nb_units == 0,
                       name="operation_process_no_shutdown_constraint",
-                      mask=np.isfinite(p.process_unit_size) * (p.process_unit_size > 0) * (p.process_no_shutdown == True))
+                      mask=condition_mask(p, np.isfinite(p.process_unit_size) * (p.process_unit_size > 0) * (p.process_no_shutdown == True)))
 
 
     m.add_constraints(operation_process_state - 1 == 0,
                       name="operation_process_no_shutdown_constraint_no_unit_size",
-                      mask=np.isfinite(p.process_unit_size) * (p.process_unit_size == 0) * (p.process_no_shutdown == True))
+                      mask=condition_mask(p, np.isfinite(p.process_unit_size) * (p.process_unit_size == 0) * (p.process_no_shutdown == True)))
 
     m.add_constraints(operation_process_startup - operation_process_nb_units <= 0,
                       name="operation_process_startup_nb_units_constraint",
-                      mask=np.isfinite(p.process_unit_size) * (p.process_unit_size > 0))
+                      mask=condition_mask(p, np.isfinite(p.process_unit_size) * (p.process_unit_size > 0)))
 
     # state is the state after the step (state_def), so the units that can stop are those on before it
     m.add_constraints(operation_process_shutdown - operation_process_state.shift(hour=1) <= 0, #cannot stop more units than the ones already on
                       name="operation_process_shutdown_nb_units_constraint",
-                      mask=np.isfinite(p.process_unit_size) * (p.process_unit_size > 0) * (p.hour != p.hour[0]))
+                      mask=condition_mask(p, np.isfinite(p.process_unit_size) * (p.process_unit_size > 0) * (p.hour != p.hour[0])))
 
     m.add_constraints(operation_process_nb_units <= 1, #if no process unit size specified, only 1 unit can be installed
                       name="operation_process_nb_units_max_if_no_unit_size_constraint",
@@ -496,7 +542,7 @@ def add_process(
 
     m.add_constraints(operation_process_power==0, #if process_factor not defined for a given mode, then the technology cannot operate under this mode
                       name="operation_process_power_undefined_mode",
-                      mask=(p.process_factor == 0).all(dim="resource"))
+                      mask=condition_mask(p, (p.process_factor == 0).all(dim="resource")))
 
     # Operation capacity
     m.add_constraints(
@@ -533,19 +579,19 @@ def add_process(
         * (p.process_factor * operation_process_power).sum(["mode"])
         == 0,
         name="operation_process_net_generation_def",
-        mask=(np.isfinite(p.process_factor) * (p.process_factor != 0)).any(
+        mask=condition_mask(p, (np.isfinite(p.process_factor) * (p.process_factor != 0)).any(
             [dim for dim in ["mode"] if dim in p.process_factor.dims]
-        ),
+        )),
     )
 
     m.add_constraints(operation_process_startup+operation_process_shutdown-operation_process_nb_units<=0,
-                      name="operation_process_startupshutdown_def",)
+                      name="operation_process_startupshutdown_def", mask=condition_mask(p),)
 
     m.add_constraints(operation_process_startup - operation_process_shutdown
                       - (operation_process_state - operation_process_state.shift(hour=1))
         == 0 ,
                       name="operation_process_state_def",
-                      mask= (p.hour != p.hour[0]))
+                      mask= condition_mask(p, (p.hour != p.hour[0])))
 
 
 
@@ -565,9 +611,15 @@ def add_process(
     if bool(uptime_active.any()):
         operation_process_startup_cumulative = m.add_variables(
             name="operation_process_startup_cumulative",
-            coords=[p.area, p.process_tech, p.hour, p.year_op],
+            coords=[
+                p.area,
+                p.process_tech,
+                p.hour,
+                p.year_op,
+                *condition_coords(p),
+            ],
             lower=0,
-            mask=uptime_active,
+            mask=condition_mask(p, uptime_active),
         )
         m.add_constraints(
             operation_process_startup_cumulative
@@ -575,7 +627,7 @@ def add_process(
             - operation_process_startup
             == 0,
             name="operation_process_startup_cumulative_def",
-            mask=uptime_active,
+            mask=condition_mask(p, uptime_active),
         )
         for uptime in np.unique(min_uptime.where(uptime_active).values):
             if uptime > 1:  # NaN (not an active unit) is False
@@ -585,15 +637,21 @@ def add_process(
                     - operation_process_state
                     <= 0,
                     name=f"minimum_uptime_constraint_{uptime}",
-                    mask=uptime_active * (min_uptime == uptime),
+                    mask=condition_mask(p, uptime_active * (min_uptime == uptime)),
                 )
 
     if bool(downtime_active.any()):
         operation_process_shutdown_cumulative = m.add_variables(
             name="operation_process_shutdown_cumulative",
-            coords=[p.area, p.process_tech, p.hour, p.year_op],
+            coords=[
+                p.area,
+                p.process_tech,
+                p.hour,
+                p.year_op,
+                *condition_coords(p),
+            ],
             lower=0,
-            mask=downtime_active,
+            mask=condition_mask(p, downtime_active),
         )
         m.add_constraints(
             operation_process_shutdown_cumulative
@@ -601,7 +659,7 @@ def add_process(
             - operation_process_shutdown
             == 0,
             name="operation_process_shutdown_cumulative_def",
-            mask=downtime_active,
+            mask=condition_mask(p, downtime_active),
         )
         for downtime in np.unique(min_downtime.where(downtime_active).values):
             if downtime > 1:
@@ -612,7 +670,7 @@ def add_process(
                     - operation_process_nb_units
                     <= 0,
                     name=f"minimum_downtime_constraint_{downtime}",
-                    mask=downtime_active * (min_downtime == downtime),
+                    mask=condition_mask(p, downtime_active * (min_downtime == downtime)),
                 )
 
     #TODO: apply maximum uptime and downtime constraints - need to create 2 new input parameters
@@ -668,7 +726,7 @@ def add_process(
         + p.process_startup_cost* operation_process_startup.sum("hour")
         + p.process_shutdown_cost * operation_process_shutdown.sum("hour")
         == 0,
-        name="operation_process_costs_def",
+        name="operation_process_costs_def", mask=condition_mask(p),
     )
 
     if annuity_full_life(p, "process_annuity_cost"):
