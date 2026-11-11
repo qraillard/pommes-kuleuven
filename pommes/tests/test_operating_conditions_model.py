@@ -14,6 +14,9 @@ from pommes.tests.conditions_helper import (
     with_conditions,
 )
 from pommes.tests.dataset_nnodes import build_nnode_parameters
+from pommes.tests.test_retrofit_conversion import (  # noqa: F401 (fixture)
+    p_retrofit_value,
+)
 from pommes.utils import sort_coords_and_vars
 
 C = "operating_condition"
@@ -189,7 +192,9 @@ def test_identical_conditions_are_neutral_on_test_case(full):
 
 
 def test_identical_conditions_are_neutral_on_nnodes():
-    # three areas: transport, combined and storage capacities and their fixed costs are real here
+    # three areas: combined and storage capacities and their fixed costs, and the folding over areas, are real here
+    # (build_nnode_parameters has no transport technology: transport is in the whole model of test_case, and in the
+    # transport file)
     _assert_neutral(build_nnode_parameters(n_areas=3, n_hours=24), [0.5, 0.3, 0.2])
 
 
@@ -217,16 +222,23 @@ def _absent(p):
     return p.operating_condition_weight.isnull()
 
 
-def test_an_absent_pair_in_the_full_model(full):
+def _in_mode(p, flags):
+    """The six annual constraints per condition (False) or on the expectation (True)."""
+    return _flags_true(p) if flags else p
+
+
+@pytest.mark.parametrize("flags", [False, True])
+def test_an_absent_pair_in_the_full_model(full, flags):
     # b has other data than a: a row of b leaking into the model would change the objective
-    p = _perturbed(full, [1.0, np.nan], n=2)
+    p = _in_mode(_perturbed(full, [1.0, np.nan], n=2), flags)
     m = _solve(p)
-    m_a = _solve(_perturbed(full, [1.0], n=1))
+    m_a = _solve(_in_mode(_perturbed(full, [1.0], n=1), flags))
     assert m.objective.value == pytest.approx(m_a.objective.value, rel=1e-7)
     _assert_rows(m, m_a, _absent(p))
 
 
-def test_an_absent_pair_in_one_year_of_the_full_model(full):
+@pytest.mark.parametrize("flags", [False, True])
+def test_an_absent_pair_in_one_year_of_the_full_model(full, flags):
     year = int(full.year_op[1])
     weights = np.full((full.sizes["year_op"], 2), 0.5)
     weights[1] = [1.0, np.nan]
@@ -235,13 +247,14 @@ def test_an_absent_pair_in_one_year_of_the_full_model(full):
     demand_b = full.demand * 1.25
     copy_b = demand_b.where(full.year_op != year, full.demand)
     p = with_conditions(full, [0.5, 0.5], demand=[full.demand, demand_b])
+    p = _in_mode(p, flags)
     p["operating_condition_weight"] = xr.DataArray(
         weights,
         coords={"year_op": full.year_op.values, C: LABELS[:2]},
         dims=("year_op", C),
     )
-    reference = with_conditions(
-        full, [0.5, 0.5], demand=[full.demand, copy_b]
+    reference = _in_mode(
+        with_conditions(full, [0.5, 0.5], demand=[full.demand, copy_b]), flags
     )
     m = _solve(p)
     m_ref = _solve(reference)
@@ -262,8 +275,11 @@ WEIGHTS = [0.6, 0.4]
 
 
 def _one_vintage(p):
-    """Investment in the vintage 2030 only (end of life 2050, no early decommissioning)."""
+    """Investment in the vintage 2030 only (end of life 2050), no early decommissioning of any module."""
     p = p.copy(deep=True)
+    for name in p.data_vars:
+        if name.endswith("_early_decommissioning"):
+            p[name] = xr.DataArray(False)
     for name in p.data_vars:
         if name.endswith("_investment_max"):
             p[name] = (p[name] * xr.ones_like(p.year_inv, dtype=float)).copy()
@@ -287,6 +303,8 @@ def _two_years(p):
     years = xr.concat([p, p], dim="year_op", data_vars="minimal", coords="minimal", compat="override")
     years = years.assign_coords(year_op=[2030, 2040])
     years["discount_factor"] = ("year_op", WEIGHTS)
+    # not in the objective: any value but 1 shows a leak (it would change the objective)
+    years["operation_year_weight"] = ("year_op", [5.0, 7.0])
     years["demand"] = xr.concat(
         [p.demand.squeeze("year_op", drop=True) * d for d, _ in WEATHER], dim=years.year_op
     )
@@ -356,3 +374,140 @@ def test_two_stage_decomposition():
         assert status == "ok"
         total += weight * m_k.objective.value
     assert m.objective.value == pytest.approx(total, rel=1e-7)
+
+
+# --- 6. retrofit: one decision for all the conditions --------------------------------------------------------------
+
+HYDROGEN = 3.0  # demand in 2030: what "smr" (capped at 3) can supply alone
+SMR_COST = [300.0, 0.0]  # variable cost of "smr" in the conditions a and b
+RETROFIT = "planning_retrofit_conversion_power_capacity"
+
+
+def _retrofit_market(p, annuity, weights, smr_cost=SMR_COST):
+    """
+    The retrofit smr -> smr_ccs as the only route to smr_ccs, worth it only where "smr" is dear.
+
+    From the p_retrofit_value slice: a hydrogen demand "smr" covers alone, no direct investment in smr_ccs, no
+    conversion annuity or fixed cost (the retrofit annuity is then the only planning cost) and the variable cost of
+    "smr" per condition. smr_ccs also draws a little electricity, which costs it methane (shed at 1000): it is dearer
+    than "smr" at a variable cost of 0 and cheaper at 300. A gas price cannot favour smr_ccs: both take 1.5 methane.
+    """
+    p = p.copy(deep=True)
+    p["demand"].loc[dict(resource="hydrogen", year_op=2030)] = HYDROGEN
+    for name in ("conversion_annuity_cost", "conversion_fixed_cost"):
+        p[name] = xr.where(p[name].notnull(), 0.0, np.nan)
+    p["conversion_power_capacity_investment_max"].loc[
+        dict(conversion_tech="smr_ccs")
+    ] = 0.0
+    p["retrofit_conversion_annuity_cost"] = xr.full_like(
+        p.retrofit_conversion_annuity_cost, annuity
+    )
+    cost = lambda smr: p.conversion_variable_cost.where(  # noqa: E731
+        p.conversion_tech != "smr", smr
+    )
+    return with_conditions(
+        p,
+        weights,
+        labels=LABELS[:2],
+        conversion_variable_cost=[cost(c) for c in smr_cost],
+    )
+
+
+def _saving(p, smr_cost):
+    """What one unit of smr_ccs capacity saves in a condition where "smr" costs `smr_cost` per MWh, in a year."""
+    f, vc = p.conversion_factor, p.conversion_variable_cost
+    elec = "electricity"
+    # electricity of one MWh of hydrogen from smr_ccs, made by ocgt from methane (the methane of smr and smr_ccs is
+    # the same: it cancels)
+    ocgt_per_mwh = float(
+        -f.sel(conversion_tech="smr_ccs", resource=elec)
+        / f.sel(conversion_tech="ocgt", resource=elec)
+    )
+    methane = float(-f.sel(conversion_tech="ocgt", resource="methane"))
+    ccs_cost = float(vc.sel(conversion_tech="smr_ccs")) + ocgt_per_mwh * (
+        float(vc.sel(conversion_tech="ocgt"))
+        + methane * float(p.load_shedding_cost.sel(resource="methane"))
+    )
+    hours = float(
+        p.operation_year_duration.sel(year_op=2030) / p.time_step_duration.sum()
+    )
+    return hours * max(0.0, smr_cost - ccs_cost)
+
+
+def _retrofitted(m):
+    return float(m.solution[RETROFIT].sum())
+
+
+@pytest.mark.parametrize(
+    "weights, share",
+    [
+        ((1.0, 0.0), 0.5),  # profitable in a only, weight 1 there
+        ((0.0, 1.0), 0.01),  # a, where it pays, costs nothing in the expectation
+        ((0.5, 0.5), 0.45),  # below the weighted saving
+        ((0.5, 0.5), 0.55),  # above it
+        ((0.8, 0.2), 0.7),  # below it, above the saving of equal weights
+        ((0.8, 0.2), 0.9),  # above it
+    ],
+)
+def test_retrofit_decision_is_shared(p_retrofit_value, weights, share):  # noqa: F811
+    p = p_retrofit_value
+    saving_a = _saving(p, SMR_COST[0])
+    assert saving_a > 0 and _saving(p, SMR_COST[1]) == 0
+    annuity = share * saving_a
+    market = _retrofit_market(p, annuity, list(weights))
+    m = _solve(market)
+    # the retrofit pays when the weighted saving of a unit exceeds its annuity (nothing is saved in b)
+    weighted = weights[0] * saving_a
+    expected = HYDROGEN if weighted > annuity else 0.0
+    assert _retrofitted(m) == pytest.approx(expected, abs=1e-6)
+    # objective: the model without the retrofit, less what the retrofitted units save net of their annuity
+    off = market.copy(deep=True)
+    off["retrofit_conversion"] = xr.DataArray(False)
+    m_off = _solve(off)
+    assert m.objective.value == pytest.approx(
+        m_off.objective.value - expected * (weighted - annuity), rel=1e-7
+    )
+
+
+def test_retrofit_variables_have_no_condition(p_retrofit_value):  # noqa: F811
+    m = build_model(_retrofit_market(p_retrofit_value, 1.0, [0.6, 0.4]))
+    assert_condition_dims_consistent(m)
+    for kind in (m.variables, m.constraints):
+        names = [n for n in kind if "retrofit" in n]
+        assert names
+        for name in names:
+            assert C not in kind[name].labels.dims, name
+    assert RETROFIT in m.variables
+    assert "planning_retrofit_conversion_costs" in m.variables
+    # while the dispatch around it does carry the condition
+    assert C in m.variables["operation_conversion_power"].labels.dims
+
+
+def _shortfall(p):
+    """The scenario of test_retrofit_conversion.py: 3 units retrofitted and 4 of smr_ccs built directly."""
+    p = p.copy(deep=True)
+    p["demand"].loc[dict(resource="hydrogen", year_op=2030)] = 10.0
+    p["conversion_annuity_cost"] = xr.where(
+        p.conversion_tech == "smr_ccs", 5000.0, p.conversion_annuity_cost
+    )
+    p["retrofit_conversion_annuity_cost"] = xr.full_like(
+        p.retrofit_conversion_annuity_cost, 0.1
+    )
+    return p
+
+
+def test_retrofit_fixture_with_identical_conditions_is_neutral(
+    p_retrofit_value,  # noqa: F811
+):
+    p = _shortfall(p_retrofit_value)
+    m0 = _solve(p, guard=False)
+    m1 = _solve(with_conditions(p, [0.5, 0.3, 0.2]))
+    assert _retrofitted(m0) == pytest.approx(3.0, abs=1e-6)
+    assert m1.objective.value == pytest.approx(m0.objective.value, rel=1e-7)
+    for name in (RETROFIT, "planning_conversion_power_capacity"):
+        np.testing.assert_allclose(
+            m1.solution[name].values,
+            m0.solution[name].values,
+            rtol=1e-7,
+            atol=1e-7,
+        )
