@@ -508,6 +508,13 @@ def annual_quantity(expr, p: Dataset, expected_flag: str):
     return expr
 
 
+def annual_mask(p: Dataset, expected_flag: str, mask):
+    """Mask of a flagged annual constraint: `mask` on the expectation (no condition dimension), else per condition."""
+    if expected_flag in p and bool(p[expected_flag]):
+        return mask
+    return condition_mask(p, mask)
+
+
 def condition_dual_scale(p: Dataset) -> DataArray:
     """Weight per (year_op, condition); 1 without the coordinate."""
     w = operating_condition_weight(p)

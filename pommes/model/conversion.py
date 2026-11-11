@@ -7,6 +7,7 @@ from xarray import Dataset
 
 from pommes.model.annuity import annuity_full_life, full_life_window
 from pommes.utils import (
+    annual_mask,
     annual_quantity,
     condition_coords,
     condition_mask,
@@ -383,12 +384,10 @@ def add_conversion(
         )
         <= p.conversion_max_yearly_production,
         name="operation_conversion_yearly_production_max_constraint",
-        # the constraint carries the dimension unless it is on the expectation
-        mask=(
-            np.isfinite(p.conversion_max_yearly_production)
-            if "conversion_max_yearly_production_expected" in p
-            and bool(p.conversion_max_yearly_production_expected)
-            else condition_mask(p, np.isfinite(p.conversion_max_yearly_production))
+        mask=annual_mask(
+            p,
+            "conversion_max_yearly_production_expected",
+            np.isfinite(p.conversion_max_yearly_production),
         ),
     )
 

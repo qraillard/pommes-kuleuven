@@ -7,6 +7,7 @@ from linopy import Model
 
 from pommes.tests.conditions_helper import with_conditions
 from pommes.utils import (
+    annual_mask,
     annual_quantity,
     condition_coords,
     condition_dual_scale,
@@ -114,3 +115,16 @@ def test_annual_quantity_follows_the_flag():
     assert (annual_quantity(x, p, "on") == 3).all()
     assert annual_quantity(x, p, "off") is x
     assert annual_quantity(x, p, "absent") is x
+
+
+def test_annual_mask_follows_the_flag():
+    mask = xr.DataArray([True, False], dims="year_op")
+    assert annual_mask(base(), "on", mask) is mask
+    p = with_conditions(base(), [0.5, 0.5])
+    p["on"] = True
+    p["off"] = False
+    assert annual_mask(p, "on", mask) is mask
+    for flag in ("off", "absent"):
+        got = annual_mask(p, flag, mask)
+        assert got.dims == ("year_op", "operating_condition")
+        assert got.sel(operating_condition="a").values.tolist() == [True, False]

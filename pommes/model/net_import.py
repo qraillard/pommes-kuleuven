@@ -4,6 +4,14 @@ import numpy as np
 from linopy import Constraint, Model
 from xarray import Dataset
 
+from pommes.utils import (
+    annual_mask,
+    annual_quantity,
+    condition_coords,
+    condition_mask,
+    expected_over_conditions,
+)
+
 
 def add_net_import(
     model: Model,
@@ -99,13 +107,15 @@ def add_net_import(
     operation_net_import_import = m.add_variables(
         name="operation_net_import_import",
         lower=0,
-        coords=[p.area, p.hour, p.resource, p.year_op],
+        coords=[p.area, p.hour, p.resource, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     operation_net_import_export = m.add_variables(
         name="operation_net_import_export",
         lower=0,
-        coords=[p.area, p.hour, p.resource, p.year_op],
+        coords=[p.area, p.hour, p.resource, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     # Operation - Imports & exports intermediate variables
@@ -113,26 +123,31 @@ def add_net_import(
     operation_net_import_abs = m.add_variables(
         name="operation_net_import_abs",
         lower=0,
-        coords=[p.area, p.hour, p.resource, p.year_op],
+        coords=[p.area, p.hour, p.resource, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     operation_net_import_net_generation = m.add_variables(
         name="operation_net_import_net_generation",
-        coords=[p.area, p.hour, p.resource, p.year_op],
+        coords=[p.area, p.hour, p.resource, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     # Costs - Imports & exports
 
     operation_net_import_costs = m.add_variables(
         name="operation_net_import_costs",
-        coords=[p.area, p.resource, p.year_op],
+        coords=[p.area, p.resource, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     # ------------------
     # Objective function
     # ------------------
 
-    annualised_totex_def.lhs += operation_net_import_costs.sum("resource")
+    annualised_totex_def.lhs += expected_over_conditions(
+        operation_net_import_costs.sum("resource"), p
+    )
 
     # --------------
     # Constraints
@@ -149,18 +164,34 @@ def add_net_import(
     # Operation - Imports & exports other constraints
 
     m.add_constraints(
-        operation_year_normalization
-        * operation_net_import_import.sum(["area", "hour"])
+        annual_quantity(
+            operation_year_normalization
+            * operation_net_import_import.sum(["area", "hour"]),
+            p,
+            "net_import_max_yearly_energy_import_expected",
+        )
         <= p.net_import_max_yearly_energy_import,
-        mask=np.isfinite(p.net_import_max_yearly_energy_import),
+        mask=annual_mask(
+            p,
+            "net_import_max_yearly_energy_import_expected",
+            np.isfinite(p.net_import_max_yearly_energy_import),
+        ),
         name="operation_net_import_import_yearly_max_constraint",
     )
 
     m.add_constraints(
-        operation_year_normalization
-        * operation_net_import_export.sum(["area", "hour"])
+        annual_quantity(
+            operation_year_normalization
+            * operation_net_import_export.sum(["area", "hour"]),
+            p,
+            "net_import_max_yearly_energy_export_expected",
+        )
         <= p.net_import_max_yearly_energy_export,
-        mask=np.isfinite(p.net_import_max_yearly_energy_export),
+        mask=annual_mask(
+            p,
+            "net_import_max_yearly_energy_export_expected",
+            np.isfinite(p.net_import_max_yearly_energy_export),
+        ),
         name="operation_net_import_export_yearly_max_constraint",
     )
 
@@ -171,6 +202,7 @@ def add_net_import(
         + operation_net_import_import
         + operation_net_import_export
         == 0,
+        mask=condition_mask(p),
         name="operation_net_import_abs_def",
     )
 
@@ -179,6 +211,7 @@ def add_net_import(
         + operation_net_import_import
         - operation_net_import_export
         == 0,
+        mask=condition_mask(p),
         name="operation_net_import_net_generation_def",
     )
 
@@ -194,6 +227,7 @@ def add_net_import(
             - p.net_import_export_price * operation_net_import_export
         ).sum("hour")
         == 0,
+        mask=condition_mask(p),
         name="operation_net_import_costs_def",
     )
 
