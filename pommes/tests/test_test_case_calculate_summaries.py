@@ -47,3 +47,23 @@ def test_test_case(parameters):
     generate_summary_dataframes_from_results(s, p)
 
     assert True
+
+
+def test_no_level_reordering_without_operating_condition(parameters, monkeypatch):
+    """Without the coordinate the row labels are those of 0.5.0+kul."""
+    import pandas as pd
+
+    model = build_model(parameters)
+    model.solve(solver_name="highs")
+
+    def fail(self, *args, **kwargs):
+        raise AssertionError("reorder_levels must not run without the coordinate")
+
+    monkeypatch.setattr(pd.DataFrame, "reorder_levels", fail)
+    for type_value in ["costs", "net_generation"]:
+        calculate_total_of_a_type(
+            type=type_value,
+            solution=model.solution,
+            parameters=model.parameters,
+            operation_or_planning="operation",
+        )

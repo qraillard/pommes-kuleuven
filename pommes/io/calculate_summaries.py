@@ -540,9 +540,15 @@ def calculate_total_of_a_type(
 
         # The levels are concatenated by position and named after the first
         # table: put every table's levels in the order of the first one.
+        # Only with the operating-condition coordinate: without it the output
+        # stays what it was at 0.5.0+kul.
         names = list(calculated_total_dict.values())[0].index.names
         for key, table in calculated_total_dict.items():
-            if table.index.nlevels > 1 and set(table.index.names) == set(names):
+            if (
+                OPERATING_CONDITION in solution.coords
+                and table.index.nlevels > 1
+                and set(table.index.names) == set(names)
+            ):
                 calculated_total_dict[key] = table.reorder_levels(names)
 
         combined_df = pd.concat(
