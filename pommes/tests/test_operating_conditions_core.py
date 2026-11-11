@@ -67,3 +67,11 @@ def test_an_absent_pair_has_no_row():
 def test_weight_zero_costs_nothing():
     m = _solve(_two_conditions([1.0, 0.0], scales=(1.0, 3.0)))
     assert m.objective.value == pytest.approx(_cost(1.0), rel=1e-9)
+    # kept with its constraints (weight 0 is not absent): rows exist and shed the whole demand at zero cost
+    labels = m.constraints["operation_adequacy_constraint"].labels
+    assert (labels.sel(operating_condition="b") != -1).all()
+    shed = m.solution["operation_load_shedding_power"]
+    shed_a = shed.sel(operating_condition="a").sum()
+    shed_b = shed.sel(operating_condition="b").sum()
+    assert float(shed_a) > 0
+    assert float(shed_b) == pytest.approx(3 * float(shed_a), rel=1e-9)
