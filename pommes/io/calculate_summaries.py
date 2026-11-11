@@ -421,7 +421,7 @@ def calculate_total_of_a_type(
     operation_or_planning: Literal["operation", "planning"] = "operation",
     by_year_op: bool = True,
     by_area: bool = True,
-) -> DataFrame | None:
+) -> DataFrame:
     r"""
     Calculate totals of a specific type, optionally aggregated by year or area.
 
@@ -533,6 +533,16 @@ def calculate_total_of_a_type(
                     stacked_into_transport_tech=True,
                     output_name=type,
                 )
+                if not by_area:
+                    # aggregate_link_data gives an "area" level back: sum it
+                    # out, as for the variables that have an area dimension.
+                    calculated_total = calculated_total.groupby(
+                        [
+                            n
+                            for n in calculated_total.index.names
+                            if n != "area"
+                        ]
+                    ).sum()
 
             calculated_total = simplify_from_postfix(
                 calculated_total, postfixes=["tech"], name=variable_name
@@ -541,15 +551,12 @@ def calculate_total_of_a_type(
             calculated_total_dict[variable_name] = calculated_total
 
         # The levels are concatenated by position and named after the first
-        # table: put every table's levels in the order of the first one.
-        # Only with the operating-condition coordinate: without it the output
-        # stays what it was at 0.5.0+kul.
+        # table, but the tables have the same level names in different
+        # orders: put every table's levels in the order of the first one.
         names = list(calculated_total_dict.values())[0].index.names
         for key, table in calculated_total_dict.items():
-            if (
-                OPERATING_CONDITION in solution.coords
-                and table.index.nlevels > 1
-                and set(table.index.names) == set(names)
+            if table.index.nlevels > 1 and set(table.index.names) == set(
+                names
             ):
                 calculated_total_dict[key] = table.reorder_levels(names)
 
@@ -569,8 +576,11 @@ def calculate_total_of_a_type(
 
         return combined_df
 
-    except KeyError as e:
-        print(e)
+    except KeyError as error:
+        raise KeyError(
+            f"Cannot compute the total of {type!r} for "
+            f"{operation_or_planning}: {error}"
+        ) from error
 
 
 def generate_summary_dataframes_from_results(
