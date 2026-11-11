@@ -159,18 +159,36 @@ WITH_CONDITION = [
 ]
 
 
-def _with_linepack(p):
+def _with_linepack(p, delay=False):
     # a finite linepack on link_1 builds the linepack rows and the power-in bound
     p = p.copy(deep=True)
     p["transport_linepack_capacity"] = xr.DataArray(
         [[5.0]], dims=("link", "transport_tech"), coords=dict(link=["link_1"], transport_tech=p.transport_tech)
     ).reindex(link=p.link)
+    if not delay:
+        return p
+    # a one-hour delay on link_2 (no linepack there) builds the delayed power-in rows
+    # (and leaves no link for the plain power-in definition, hence the two datasets)
+    p["transport_delay"] = xr.DataArray(
+        [[0.0], [1.0]], dims=("link", "transport_tech"), coords=dict(link=["link_1", "link_2"], transport_tech=p.transport_tech)
+    ).reindex(link=p.link, fill_value=0.0)
     return p
 
 
 def test_an_absent_pair_has_no_transport_row_and_weight_zero_keeps_them(p_base):
-    for weights, absent in (([1.0, np.nan], True), ([1.0, 0.0], False)):
-        m = build_model(_reversed_conditions(_with_linepack(p_base), weights))
+    delayed = "operation_transport_power_in_def_delay_1"
+    cases = [
+        (w, absent, delay)
+        for w, absent in (([1.0, np.nan], True), ([1.0, 0.0], False))
+        for delay in (False, True)
+    ]
+    for weights, absent, delay in cases:
+        required = (
+            set(WITH_CONDITION) - {"operation_transport_power_in_def"} | {delayed}
+            if delay
+            else set(WITH_CONDITION)
+        )
+        m = build_model(_reversed_conditions(_with_linepack(p_base, delay), weights))
         assert_condition_dims_consistent(m)
         checked = []
         for container in (m.variables, m.constraints):
@@ -183,13 +201,28 @@ def test_an_absent_pair_has_no_transport_row_and_weight_zero_keeps_them(p_base):
                 checked.append(name)
                 if absent:
                     assert (labels.sel(operating_condition="b") == -1).all(), name
-                    if name in WITH_CONDITION:
+                    if name in required:
                         assert (labels.sel(operating_condition="a") != -1).any(), name
-                elif name in WITH_CONDITION:
+                elif name in required:
                     assert (labels.sel(operating_condition="b") != -1).any(), name
-        assert set(WITH_CONDITION) <= set(checked)
+        assert required <= set(checked)
 
 
+def test_weight_zero_condition_adds_nothing_to_the_objective_but_keeps_its_flows(p_base):
+    full = _reversed_conditions(p_base, (1.0, 0.0))
+    m = _solve(full)
+    # condition a alone: same data, a single condition of weight 1
+    a = with_conditions(
+        p_base,
+        [1.0],
+        demand=[_demand(p_base, [[0.0] * 3, [DEMAND] * 3])],
+        conversion_availability=[_availability(p_base, [[1.0] * 3, [0.0] * 3])],
+    )
+    assert m.objective.value == pytest.approx(_solve(a).objective.value, rel=1e-9)
+    # b keeps its rows; link_2 has no capacity (sized for a only), so b's demand is shed
+    assert (m.constraints["operation_transport_power_max_constraint"].labels.sel(operating_condition="b") != -1).any()
+    shed_b = m.solution["operation_load_shedding_power"].sel(operating_condition="b")
+    assert float(shed_b.sum()) > 0
 def test_identical_conditions_leave_the_objective_unchanged(p_base):
     p = p_base.copy(deep=True)
     p["demand"] = _demand(p, [[0.0] * 3, [DEMAND] * 3])
