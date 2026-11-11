@@ -435,3 +435,80 @@ def select_dataset_variables_from_dims(
     if deep_copy:
         res = res.copy(deep=True)
     return res
+
+
+# --- Operating conditions (weighted weather years) ---
+
+OPERATING_CONDITION = "operating_condition"
+OPERATING_CONDITION_WEIGHT = "operating_condition_weight"
+
+
+def has_operating_conditions(p: Dataset) -> bool:
+    """Whether the dataset carries the operating_condition coordinate."""
+    return OPERATING_CONDITION in p.coords
+
+
+def operating_condition_weight(p: Dataset) -> DataArray | None:
+    """
+    Weight of each operating condition, dims (year_op, operating_condition).
+
+    None without the coordinate. A weight that does not carry the dimension
+    and is nan means "no weight given": 1 for a single condition, ValueError
+    for several. nan stays nan (pair absent). Labels keep their order.
+    """
+    if not has_operating_conditions(p):
+        return None
+    conditions = p[OPERATING_CONDITION]
+    w = p.get(OPERATING_CONDITION_WEIGHT)
+    if w is None or (OPERATING_CONDITION not in w.dims and w.isnull().all()):
+        if conditions.size != 1:
+            raise ValueError(
+                f"{OPERATING_CONDITION_WEIGHT} is required with several "
+                f"{OPERATING_CONDITION} values."
+            )
+        w = xr.DataArray(1.0)
+    w = w.astype(float)
+    if "year_op" in p.coords and "year_op" not in w.dims:
+        w = w.expand_dims(year_op=p["year_op"].values)
+    w, _ = xr.broadcast(w, conditions)
+    dims = [d for d in ("year_op", OPERATING_CONDITION) if d in w.dims]
+    return w.transpose(*dims, ...)
+
+
+def condition_coords(p: Dataset) -> list[DataArray]:
+    """Coordinates to append after year_op for state-of-the-world variables."""
+    return [p[OPERATING_CONDITION]] if has_operating_conditions(p) else []
+
+
+def condition_mask(p: Dataset, mask: DataArray | None = None):
+    """`mask & isfinite(weight)`; `mask` unchanged without the coordinate."""
+    if not has_operating_conditions(p):
+        return mask
+    present = np.isfinite(operating_condition_weight(p))
+    return present if mask is None else mask & present
+
+
+def expected_over_conditions(expr, p: Dataset):
+    """
+    Weighted sum over operating conditions, nan weights read as 0.
+
+    Works on linopy variables/expressions and DataArrays; returns `expr`
+    itself when the dataset has no coordinate or `expr` lacks the dimension.
+    """
+    if not has_operating_conditions(p) or OPERATING_CONDITION not in expr.dims:
+        return expr
+    w = operating_condition_weight(p).fillna(0)
+    return (expr * w).sum(OPERATING_CONDITION)
+
+
+def annual_quantity(expr, p: Dataset, expected_flag: str):
+    """Expectation over conditions when `p[expected_flag]` is true, else expr."""
+    if expected_flag in p and bool(p[expected_flag]):
+        return expected_over_conditions(expr, p)
+    return expr
+
+
+def condition_dual_scale(p: Dataset) -> DataArray:
+    """Weight per (year_op, condition); 1 without the coordinate."""
+    w = operating_condition_weight(p)
+    return xr.DataArray(1.0) if w is None else w
