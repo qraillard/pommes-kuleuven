@@ -4,6 +4,12 @@ import linopy
 from linopy import Constraint, Model
 from xarray import Dataset
 
+from pommes.utils import (
+    condition_coords,
+    condition_mask,
+    expected_over_conditions,
+)
+
 
 def add_turpe(
     model: Model, model_parameters: Dataset, annualised_totex_def: Constraint
@@ -88,7 +94,8 @@ def add_turpe(
     operation_turpe_variable_costs = m.add_variables(
         name="operation_turpe_variable_costs",
         lower=0,
-        coords=[p.area, p.year_op],
+        coords=[p.area, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     operation_turpe_fixed_costs = m.add_variables(
@@ -100,7 +107,8 @@ def add_turpe(
     # ------------------
 
     annualised_totex_def.lhs += (
-        operation_turpe_variable_costs + operation_turpe_fixed_costs
+        expected_over_conditions(operation_turpe_variable_costs, p)
+        + operation_turpe_fixed_costs
     )
 
     # --------------
@@ -125,6 +133,7 @@ def add_turpe(
         )
         <= 0,
         name="operation_turpe_contract_power_max_constraint",
+        mask=condition_mask(p),
     )
 
     m.add_constraints(
@@ -156,6 +165,7 @@ def add_turpe(
         - operation_turpe_variable_costs
         == 0,
         name="operation_turpe_variable_costs_def",
+        mask=condition_mask(p),
     )
 
     m.add_constraints(

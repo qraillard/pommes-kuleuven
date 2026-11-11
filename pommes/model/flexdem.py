@@ -5,6 +5,8 @@ import xarray as xr
 from linopy import Constraint, Model
 from xarray import Dataset
 
+from pommes.utils import condition_coords, condition_mask
+
 
 def add_flexdem(
     model: Model,
@@ -33,8 +35,8 @@ def add_flexdem(
     operation_flexdem_demand = m.add_variables(
         name="operation_flexdem_demand",
         lower=0,
-        coords=[p.area, p.resource, p.hour, p.year_op],
-        mask=(flexdem_demand != 0).any("hour"),
+        coords=[p.area, p.resource, p.hour, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p, (flexdem_demand != 0).any("hour")),
     )
 
     # --------------
@@ -49,11 +51,11 @@ def add_flexdem(
 
     m.add_constraints(operation_flexdem_demand -p.flexdem_demand*p.flexdem_maxload_ratio <=0,
                       name="operation_flexdem_demand_max",
-                      mask=np.isfinite(p.flexdem_maxload_ratio))
+                      mask=condition_mask(p, np.isfinite(p.flexdem_maxload_ratio)))
 
     m.add_constraints(operation_flexdem_demand - p.flexdem_demand * p.flexdem_minload_ratio >= 0,
                       name="operation_flexdem_demand_min",
-                      mask=p.flexdem_minload_ratio > 0)
+                      mask=condition_mask(p, p.flexdem_minload_ratio > 0))
 
     # Conservation constraints. Like demand, flexdem_demand and operation_flexdem_demand are
     # energies per time step (the adequacy balance adds them to net generations, which are
@@ -72,7 +74,7 @@ def add_flexdem(
     horizon_energy = shifted_energy.sum("hour")
     m.add_constraints((horizon_energy if carry is None else horizon_energy + carry) == 0,
                       name="operation_flexdem_demand_conservation",
-                      mask=active,
+                      mask=condition_mask(p, active),
     )
 
     # Windows: the same within each window of flexdem_conservation_hrs hours. A time step belongs
@@ -93,7 +95,7 @@ def add_flexdem(
         m.add_constraints(
             lhs == 0,
             name=f"operation_flexdem_demand_conservation_{int(window_hrs)}h",
-            mask=active & (conservation_hrs == window_hrs),
+            mask=condition_mask(p, active & (conservation_hrs == window_hrs)),
         )
 
 
@@ -105,7 +107,7 @@ def add_flexdem(
         - p.flexdem_ramp_up * flexdem_demand
         <= 0,
         name="operation_flexdem_ramp_up_constraint",
-        mask=np.isfinite(p.flexdem_ramp_up) * (p.hour != p.hour[0]),
+        mask=condition_mask(p, np.isfinite(p.flexdem_ramp_up) * (p.hour != p.hour[0])),
     )
 
     m.add_constraints(
@@ -114,7 +116,7 @@ def add_flexdem(
         -p.flexdem_ramp_down * flexdem_demand
         <= 0,
         name="operation_flexdem_ramp_down_constraint",
-        mask=np.isfinite(p.flexdem_ramp_down) * (p.hour != p.hour[0]),
+        mask=condition_mask(p, np.isfinite(p.flexdem_ramp_down) * (p.hour != p.hour[0])),
     )
 
 
