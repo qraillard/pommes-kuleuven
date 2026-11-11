@@ -8,6 +8,7 @@ import xarray as xr
 from pommes import (
     generate_summary_dataframes_from_results,
 )
+from pommes.utils import OPERATING_CONDITION
 
 
 def plot_energy_cost(
@@ -52,6 +53,7 @@ def plot_energy_cost(
         ValueError: If `plot_choice` is not 'area' or 'year'.
         ValueError: If `plot_choice` is 'area' but multiple years are selected.
         ValueError: If `plot_choice` is 'year' but multiple areas are selected.
+        NotImplementedError: If the solution has several operating conditions.
     """
 
     def kg_to_mwh(mass: float) -> float:
@@ -82,6 +84,13 @@ def plot_energy_cost(
         raise ValueError("you have to select either 'area' or 'year'.")
 
     solution = xr.open_dataset(solution_path + "solution.nc")
+    if OPERATING_CONDITION in solution.coords:
+        raise NotImplementedError(
+            "plot_energy_cost would add the operating conditions together "
+            "(planning costs counted once per condition). Select one "
+            "condition with a list first, e.g. "
+            "sel(operating_condition=['a']), and save that solution."
+        )
     parameters = xr.open_dataset(solution_path + "input.nc")
     dual = xr.open_dataset(solution_path + "dual.nc")
     summary = generate_summary_dataframes_from_results(solution, parameters)

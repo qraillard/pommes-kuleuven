@@ -441,10 +441,23 @@ def select_dataset_variables_from_dims(
 
 OPERATING_CONDITION = "operating_condition"
 OPERATING_CONDITION_WEIGHT = "operating_condition_weight"
+NO_CONDITION_COORD_MESSAGE = (
+    f"{OPERATING_CONDITION} is a dimension without a coordinate: the "
+    f"conditions and their weights would be ignored. Call "
+    f"assign_coords({OPERATING_CONDITION}=[...]) first."
+)
 
 
 def has_operating_conditions(p: Dataset) -> bool:
-    """Whether the dataset carries the operating_condition coordinate."""
+    """
+    Whether the dataset carries the operating_condition coordinate.
+
+    Raises:
+        ValueError: If operating_condition is a dimension without a
+            coordinate (the conditions and their weights would be ignored).
+    """
+    if OPERATING_CONDITION in p.dims and OPERATING_CONDITION not in p.coords:
+        raise ValueError(NO_CONDITION_COORD_MESSAGE)
     return OPERATING_CONDITION in p.coords
 
 
@@ -524,7 +537,9 @@ def condition_dual_scale(p: Dataset) -> DataArray:
     Weight per (year_op, condition); 1 without the coordinate.
 
     Divide the raw dual of an operational constraint by it to get its price
-    (the dual of a row is the weight of its condition times the price). A
+    (the dual of a row is the weight of its condition times the price). Only
+    for constraints that carry `operating_condition`: the one-row-per-year
+    constraints of the `_expected` flags already give the price of the year. A
     condition of weight 0 has no price: the division gives nan or inf there,
     whatever the dual. A condition absent in a year (weight nan) has no row.
     """

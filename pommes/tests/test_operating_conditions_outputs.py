@@ -262,3 +262,13 @@ def test_save_and_read_a_solution_with_conditions(p_cond, model_cond, tmp_path):
         np.testing.assert_allclose(
             got.sort_index().values, ref.values, rtol=1e-9, atol=1e-9
         )
+
+
+def test_energy_cost_plot_refuses_conditions(tmp_path):
+    from pommes.visualisation.energy_cost_plot import plot_energy_cost
+
+    xr.Dataset(coords={C: ["a", "b"]}).to_netcdf(tmp_path / "solution.nc")
+    with pytest.raises(NotImplementedError, match="operating conditions"):
+        plot_energy_cost(
+            str(tmp_path) + "/", "electricity", "area", save=False
+        )

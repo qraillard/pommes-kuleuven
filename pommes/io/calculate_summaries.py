@@ -433,8 +433,10 @@ def calculate_total_of_a_type(
     to modify that.
 
     With operating conditions, the totals are never summed over
-    `operating_condition`: each one comes per condition (the weighted mean is
-    `expected_over_conditions` of the table). Capacities, shared by the
+    `operating_condition`: each one comes per condition (the weighted mean
+    over the conditions is the sum, for each `year_op`, of the weight times the
+    table of each condition: group by `year_op` and condition, then multiply by
+    the weights). Capacities, shared by the
     conditions, have no condition; costs and emissions shared by the
     conditions (planning costs, TURPE fixed cost) are repeated in each, so the
     cost of a condition is its planning costs plus its operation costs. In a

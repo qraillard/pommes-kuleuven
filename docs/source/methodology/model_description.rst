@@ -698,8 +698,9 @@ with ``False`` and counts for 0 in the expectation with ``True``.
       - sum over the years of the expected annual production
 
 The cumulative production spans several years whose conditions may differ, so "in each condition" has no meaning
-there: it always uses the expectation. The carbon tax of an area and of a tax group is paid on the expected
-emissions. ``combined`` has no annual production ceiling.
+there: it always uses the expectation. The carbon tax of an area and of a tax group is paid in each condition (floored
+at 0, as without conditions) and counted in expectation: with emissions of +10 and -10 in two equally weighted
+conditions, the tax is paid on 5, not on 0. ``combined`` has no annual production ceiling.
 
 Retrofit
 --------
@@ -714,8 +715,10 @@ Outputs
   ``read_solution`` are unchanged: one more column in the CSV files, one more dimension in the NetCDF files.
   Selecting one condition needs a list, ``sel(operating_condition=["a"])``.
 - Prices: the raw dual of an operational constraint is the weight of its condition times the price. Divide it by
-  ``condition_dual_scale(p)`` (the weight, 1 without conditions) to get the price. In a condition of weight 0 the
-  weight is 0: there is no price there (the division gives nan or inf).
+  ``condition_dual_scale(p)`` (the weight, 1 without conditions) to get the price. It applies only to constraints that
+  carry ``operating_condition``: the one-row-per-year constraints of the ``_expected`` flags already give the price of
+  the year. In a condition of weight 0 the weight is 0: there is no
+  price there (the division gives nan or inf).
 - Summaries (``calculate_summaries.py``, ``post_process.py``) never sum over ``operating_condition``: energy,
   emissions and costs come per condition. Capacities, shared by the conditions, have no condition. The planning
   costs, which have none, are repeated in each condition, so the cost of a condition is its planning costs plus its

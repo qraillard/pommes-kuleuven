@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from pommes.model.build_model import build_model
 from pommes.model.data_validation.dataset_check import check_inputs
 
 ALLOWED = [
@@ -139,3 +140,21 @@ def test_weights_are_finite_non_negative_and_present(parameters, rows, message):
     with pytest.raises(ValueError, match=message) as error:
         check_inputs(ds)
     assert str(int(parameters.year_op.values[0])) in str(error.value)
+
+
+def test_dimension_without_coordinate_is_refused(parameters):
+    """The natural xr.concat gives a dimension with no coordinate: refuse it."""
+    a = parameters.conversion_availability
+    ds = parameters.assign(
+        conversion_availability=xr.concat(
+            [a, a * 0.5], dim="operating_condition"
+        ),
+        operating_condition_weight=xr.DataArray(
+            [0.5, 0.5], dims="operating_condition"
+        ),
+    )
+    assert "operating_condition" not in ds.coords
+    with pytest.raises(ValueError, match="without a coordinate"):
+        check_inputs(ds)
+    with pytest.raises(ValueError, match="without a coordinate"):
+        build_model(ds)

@@ -8,6 +8,7 @@ from xarray import Dataset
 
 from pommes.model.annuity import infer_annuity_full_life
 from pommes.model.data_validation import ref_inputs
+from pommes.utils import has_operating_conditions
 
 logger = logging.getLogger(__name__)
 
@@ -107,9 +108,10 @@ def check_operating_condition_weight(ds: Dataset) -> None:
     fine with one condition (read as 1), an error with several.
 
     Raises:
-        ValueError: If the weights are missing or do not sum to 1.
+        ValueError: If operating_condition is a dimension without a
+            coordinate, or if the weights are missing or do not sum to 1.
     """
-    if "operating_condition" not in ds.coords:
+    if not has_operating_conditions(ds):
         return
     weight = ds["operating_condition_weight"]
     if "operating_condition" not in weight.dims:
