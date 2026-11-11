@@ -38,6 +38,9 @@ def _base():
     ds["storage_factor_in"] = ds.storage_factor_in * 0 - 1.0
     ds["storage_factor_out"] = ds.storage_factor_out * 0 + 1.0
     ds["storage_dissipation"] = ds.storage_dissipation * 0
+    # finite and slack ramps: they build the ramp constraints without changing the solution
+    for key in ("storage_charge_ramp", "storage_discharge_ramp"):
+        ds[key] = xr.full_like(ds[key], 1.0)
     return ds
 
 
@@ -105,10 +108,18 @@ def test_storage_cycle_closed_in_each_condition():
 
 
 def test_identical_conditions_leave_the_objective_unchanged():
+    # the plant runs in the first two hours only, so a battery is built and its costs are paid once
     ds = _base()
-    reference = _solve(ds).objective.value
-    same = with_conditions(ds, [0.3, 0.7], demand=[ds.demand, ds.demand])
-    assert _solve(same).objective.value == pytest.approx(reference, rel=1e-9)
+    pattern = [1, 1, 0, 0]
+    ds["conversion_availability"] = _availability(ds, pattern)
+    reference = _solve(ds)
+    same = with_conditions(
+        ds, [0.5, 0.5], conversion_availability=[_availability(ds, pattern)] * 2
+    )
+    m = _solve(same)
+    assert float(m.solution["planning_storage_power_capacity"].sum()) > 0
+    assert float(m.solution["operation_storage_costs"].sum()) > 0
+    assert m.objective.value == pytest.approx(reference.objective.value, rel=1e-9)
 
 
 def test_an_absent_pair_has_no_storage_row_and_weight_zero_keeps_them():
@@ -143,6 +154,8 @@ WITH_CONDITION = [
     "operation_storage_power_in_max_constraint",
     "operation_storage_power_out_max_constraint",
     "operation_storage_level_max_constraint",
+    "operation_storage_charge_ramp_constraint",
+    "operation_storage_discharge_ramp_constraint",
     "operation_storage_net_generation_def",
     "operation_storage_costs_def",
 ]
