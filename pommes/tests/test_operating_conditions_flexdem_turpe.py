@@ -173,11 +173,13 @@ def _demand(p, values):
     return _hourly(p, values).expand_dims(area=p.area, year_op=p.year_op)
 
 
-def test_turpe_contract_covers_the_larger_condition(p_turpe):
+@pytest.mark.parametrize("order", ["ab", "ba"])
+def test_turpe_contract_covers_the_larger_condition(p_turpe, order):
+    # the larger P withdrawal (10) is in condition 'a' for "ab" and in 'b' for "ba": a contract ignoring one fails
     p = with_conditions(
         p_turpe,
         [0.5, 0.5],
-        demand=[_demand(p_turpe, WITHDRAWAL[c]) for c in "ab"],
+        demand=[_demand(p_turpe, WITHDRAWAL[c]) for c in order],
     )
     m = _solve(p)
     contract = m.solution["operation_turpe_contract_power"]
@@ -187,15 +189,15 @@ def test_turpe_contract_covers_the_larger_condition(p_turpe):
     assert "operating_condition" not in contract.dims
     assert "operating_condition" not in fixed.dims
     assert "operating_condition" in variable.dims
-    # P covers the larger hourly withdrawal of its hours (a: 10) and HCE the larger one of the conditions (b: 8)
+    # P covers the larger hourly withdrawal of its hours, whichever condition holds it
     sel = contract.sel(area="area_1", year_op=2020)
     assert float(sel.sel(hour_type="P")) == pytest.approx(10.0)
-    assert float(sel.sel(hour_type="HCE")) >= 8.0 - 1e-6
     # the contract never decreases along the hour types: the cheapest way is 10 at HCE (fixed cost 5), counted once
     assert float(fixed.sum()) == pytest.approx(10 * 5)
     # variable cost per condition (0.01 at HCE, 0.5 at P) and in expectation
-    assert float(variable.sel(operating_condition="a").sum()) == pytest.approx(8 * 0.01 + 20 * 0.5)
-    assert float(variable.sel(operating_condition="b").sum()) == pytest.approx(16 * 0.01 + 12 * 0.5)
+    expected = {"a": 8 * 0.01 + 20 * 0.5, "b": 16 * 0.01 + 12 * 0.5}
+    for k, c in enumerate("ab"):
+        assert float(variable.sel(operating_condition=c).sum()) == pytest.approx(expected[order[k]])
     assert m.objective.value == pytest.approx(50 + 0.5 * 10.08 + 0.5 * 6.16)
 
 
