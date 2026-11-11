@@ -57,14 +57,24 @@ def _solve(ds):
     return m
 
 
+def _of(da, tech):
+    """The part of a solution variable of one technology (dense: a dimension; sparse: units)."""
+    if "conversion_tech_unit" in da.dims:
+        unit_tech = da["_conversion_tech_unit_conversion_tech"]
+        return da.where(unit_tech == tech, drop=True).sum("conversion_tech_unit")
+    return da.sel(conversion_tech=tech)
+
+
+def _power(m, tech):
+    return _of(m.solution["operation_conversion_power"], tech)
+
+
 def _capacity(m, tech):
-    cap = m.solution["planning_conversion_power_capacity"]
-    return float(cap.sel(conversion_tech=tech).sum())
+    return float(_of(m.solution["planning_conversion_power_capacity"], tech).sum())
 
 
 def _energy(m, tech, **sel):
-    power = m.solution["operation_conversion_power"].sel(conversion_tech=tech)
-    return power.sel(**sel).sum("hour").squeeze()
+    return _power(m, tech).sel(**sel).sum("hour").squeeze()
 
 
 def test_capacity_is_shared_and_covers_the_larger_demand():
@@ -77,7 +87,7 @@ def test_capacity_is_shared_and_covers_the_larger_demand():
     )
     capacity = m.solution["planning_conversion_power_capacity"]
     assert "operating_condition" not in capacity.dims
-    assert float(capacity.sum()) == pytest.approx(3 * DEMAND / 0.5)
+    assert _capacity(m, "ocgt") == pytest.approx(3 * DEMAND / 0.5)
 
 
 def test_yearly_ceiling_per_condition_and_on_expectation():
@@ -119,7 +129,7 @@ def test_cumulative_production_uses_the_expectation():
     demand = ds.demand
     ds = with_conditions(ds, [0.5, 0.5], demand=[demand * 1.0, demand * 0.5])
     m = _solve(ds)
-    hydro = m.solution["operation_conversion_power"].sel(conversion_tech="hydro_ror")
+    hydro = _power(m, "hydro_ror")
     per_year = (hydro * xr.DataArray([0.5, 0.5], dims="operating_condition")).sum(
         "operating_condition"
     )
