@@ -175,3 +175,12 @@ def test_power_capacity_without_area(
     assert transport["power_capacity"].to_numpy() == pytest.approx(
         summed.reindex(transport.index)["power_capacity"].to_numpy()
     )
+
+
+def test_missing_parameter_is_raised(parameters, solved):
+    with pytest.raises(KeyError, match="Cannot compute the total of"):
+        calculate_total_of_a_type(
+            "power_capacity",
+            solved,
+            parameters.drop_vars("transport_area_from"),
+        )
