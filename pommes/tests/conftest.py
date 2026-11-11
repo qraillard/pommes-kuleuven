@@ -1023,6 +1023,23 @@ def parameters(
                 time_slice,
                 turpe,
                 eco,
+                # defaults that check_inputs adds (weighted weather years)
+                xr.Dataset(
+                    {
+                        "operating_condition_weight": np.array(np.nan),
+                        **{
+                            f"{name}_expected": np.array(False)
+                            for name in (
+                                "carbon_goal",
+                                "carbon_goal_area",
+                                "carbon_goal_group",
+                                "conversion_max_yearly_production",
+                                "net_import_max_yearly_energy_import",
+                                "net_import_max_yearly_energy_export",
+                            )
+                        },
+                    }
+                ),
             ]
         )
     )

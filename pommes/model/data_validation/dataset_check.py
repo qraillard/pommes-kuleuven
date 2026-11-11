@@ -97,6 +97,59 @@ def _complete_year_dec_with_ends_of_life(ds: Dataset) -> Dataset:
     return ds
 
 
+def check_operating_condition_weight(ds: Dataset) -> None:
+    """
+    Check the weights of the operating conditions (no-op without the coordinate).
+
+    The finite weights of each year must sum to 1 (``nan`` marks a condition
+    that does not exist in that year). A weight without the
+    ``operating_condition`` dimension and equal to ``nan`` is no weight at all:
+    fine with one condition (read as 1), an error with several.
+
+    Raises:
+        ValueError: If the weights are missing or do not sum to 1.
+    """
+    if "operating_condition" not in ds.coords:
+        return
+    weight = ds["operating_condition_weight"]
+    if "operating_condition" not in weight.dims:
+        if bool(weight.isnull().all()):
+            if ds.sizes["operating_condition"] > 1:
+                raise ValueError(
+                    "operating_condition_weight is missing: it is required "
+                    "when there are several operating conditions."
+                )
+            return
+        weight = weight.expand_dims(operating_condition=ds.operating_condition)
+    total = weight.sum("operating_condition", skipna=True)
+    # Tolerance 1e-8: a total of 1 + 2e-9 is accepted (the spec text says 1e-9).
+    if not bool((abs(total - 1) <= 1e-8).all()):
+        raise ValueError(
+            f"operating_condition_weight: the finite weights of each year "
+            f"must sum to 1, got {total.values.tolist()}."
+        )
+
+
+def _check_expected_flags(ds: Dataset) -> None:
+    """Refuse an ``*_expected`` flag set to True on a ceiling that has conditions."""
+    for ceiling in (
+        "conversion_max_yearly_production",
+        "net_import_max_yearly_energy_import",
+        "net_import_max_yearly_energy_export",
+    ):
+        flag = f"{ceiling}_expected"
+        if (
+            flag in ds
+            and bool(ds[flag])
+            and ceiling in ds
+            and "operating_condition" in ds[ceiling].dims
+        ):
+            raise ValueError(
+                f"{flag} is True: the expectation over the conditions needs "
+                f"one {ceiling}, but it carries operating_condition."
+            )
+
+
 def check_inputs(ds: Dataset) -> Dataset:
     """
     Validate and update the input dataset.
@@ -222,5 +275,8 @@ def check_inputs(ds: Dataset) -> Dataset:
             f"Max year_inv: {int(ds.year_inv.max())}, "
             f"Max year_dec: {int(ds.year_dec.max())}"
         )
+
+    check_operating_condition_weight(ds)
+    _check_expected_flags(ds)
 
     return _complete_year_dec_with_ends_of_life(ds)

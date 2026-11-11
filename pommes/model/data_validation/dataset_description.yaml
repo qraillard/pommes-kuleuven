@@ -220,6 +220,7 @@ combined_variable_cost:
   - area
   - combined_tech
   - mode
+  - operating_condition
   - year_op
   type: float64
 conversion:
@@ -247,6 +248,7 @@ conversion_availability:
   - area
   - conversion_tech
   - hour
+  - operating_condition
   - year_op
   type: float64
 conversion_early_decommissioning:
@@ -339,6 +341,7 @@ conversion_max_yearly_production:
   index_set:
   - area
   - conversion_tech
+  - operating_condition
   - year_op
   type: float64
 conversion_max_capacity_factor:
@@ -387,6 +390,7 @@ conversion_variable_cost:
   index_set:
   - area
   - conversion_tech
+  - operating_condition
   - year_op
   type: float64
 load_shedding_cost:
@@ -394,6 +398,7 @@ load_shedding_cost:
   index_set:
   - area
   - resource
+  - operating_condition
   - year_op
   type: float64
 load_shedding_max_capacity:
@@ -410,6 +415,7 @@ demand:
   - area
   - hour
   - resource
+  - operating_condition
   - year_op
   type: float64
   description: "Energy demanded in each time step [MWh per step], i.e. the sum over the step of the hourly demand (not a power)."
@@ -433,6 +439,7 @@ net_import_emission_factor:
   - area
   - hour
   - resource
+  - operating_condition
   - year_op
   type: float64
 net_import_import_price:
@@ -441,6 +448,7 @@ net_import_import_price:
   - area
   - hour
   - resource
+  - operating_condition
   - year_op
   type: float64
 net_import_export_price:
@@ -449,6 +457,7 @@ net_import_export_price:
   - area
   - hour
   - resource
+  - operating_condition
   - year_op
   type: float64
 net_import_max_yearly_energy_export:
@@ -456,6 +465,7 @@ net_import_max_yearly_energy_export:
   index_set:
   - area
   - resource
+  - operating_condition
   - year_op
   type: float64
 net_import_max_yearly_energy_import:
@@ -463,6 +473,7 @@ net_import_max_yearly_energy_import:
   index_set:
   - area
   - resource
+  - operating_condition
   - year_op
   type: float64
 net_import_total_emission_factor:
@@ -471,6 +482,7 @@ net_import_total_emission_factor:
   - area
   - hour
   - resource
+  - operating_condition
   - year_op
   type: float64
 operation_year_duration:
@@ -496,6 +508,7 @@ spillage_cost:
   index_set:
   - area
   - resource
+  - operating_condition
   - year_op
   type: float64
 spillage_max_capacity:
@@ -786,6 +799,7 @@ transport_hurdle_costs:
   index_set:
   - link
   - transport_tech
+  - operating_condition
   - year_op
   type: float64
 transport_invest_cost:
@@ -884,6 +898,7 @@ transport_availability:
   - link
   - transport_tech
   - hour
+  - operating_condition
   - year_op
   type: float64
 
@@ -1595,6 +1610,7 @@ process_variable_cost:
   - area
   - process_tech
   - mode
+  - operating_condition
   - year_op
   type: float64
 
@@ -1608,6 +1624,7 @@ flexdem_demand:
   - area
   - hour
   - resource
+  - operating_condition
   - year_op
   type: float64
   description: "Baseline flexible demand in each time step [MWh per step], i.e. the sum over the step (not a power)."
@@ -1668,3 +1685,33 @@ flexdem_minload_ratio:
   type: float64
 
 
+operating_condition_weight:
+  default: nan
+  index_set:
+  - operating_condition
+  - year_op
+  type: float64
+carbon_goal_expected:
+  default: false
+  index_set: []
+  type: bool
+carbon_goal_area_expected:
+  default: false
+  index_set: []
+  type: bool
+carbon_goal_group_expected:
+  default: false
+  index_set: []
+  type: bool
+conversion_max_yearly_production_expected:
+  default: false
+  index_set: []
+  type: bool
+net_import_max_yearly_energy_import_expected:
+  default: false
+  index_set: []
+  type: bool
+net_import_max_yearly_energy_export_expected:
+  default: false
+  index_set: []
+  type: bool
