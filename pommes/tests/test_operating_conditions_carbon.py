@@ -1,7 +1,8 @@
 """Operating conditions in the carbon module.
 
-One area, four hours, electricity only: `ocgt` (45 per MWh, 0.4 t per MWh) covers the demand and shedding (1000 per MWh)
-is the alternative that the carbon goals force, so every optimum is checkable by hand.
+One area, four hours, electricity only: `ocgt` (45 per MWh, 0.4 t per MWh) covers the demand and
+shedding (1000 per MWh) is the alternative that the carbon goals force, so every optimum is
+checkable by hand.
 """
 import numpy as np
 import pytest
@@ -15,7 +16,8 @@ from pommes.tests.conditions_helper import (
 from pommes.tests.dataset_nnodes import build_nnode_parameters
 from pommes.tests.test_flexdem import _with_defaults
 
-DEMAND = 10.0  # per hour: 40 MWh, 16 t over the year, one-year duration = sum of the steps (normalization 1)
+# per hour: 40 MWh, 16 t over the year, one-year duration = sum of the steps (normalization 1)
+DEMAND = 10.0
 GOAL = 8.0
 EMISSIONS = 0.4 * 4 * DEMAND  # 16 t
 GOALS = ["carbon_goal", "carbon_goal_area", "carbon_goal_group"]
@@ -30,7 +32,8 @@ def _base(demand=DEMAND):
     ds["operation_year_duration"][:] = float(ds.time_step_duration.sum())
     ds["demand"] = ds.demand * 0 + demand
     ds["conversion_power_capacity_max"] = ds.conversion_power_capacity_max * 0 + 200.0
-    # no planning cost: the capacity is shared by the conditions, the plain runs below must not be cheaper for it
+    # no planning cost: the capacity is shared by the conditions, the plain runs below must not be
+    # cheaper for it
     ds["conversion_fixed_cost"] = ds.conversion_fixed_cost * 0
     ds["conversion_annuity_cost"] = ds.conversion_annuity_cost * 0
     ds["load_shedding_cost"] = ds.load_shedding_cost * 0 + 1000.0
@@ -39,11 +42,17 @@ def _base(demand=DEMAND):
 
 
 def _goal(ds, kind, value=GOAL):
-    """Set one of the three goals (the group goal on a group holding the area); goals never carry a condition."""
+    """Set one of the three goals (the group goal on a group holding the area); goals never carry a
+    condition.
+    """
     if kind == "carbon_goal_group":
         ds = ds.assign_coords(carbon_goal_group=["g"])
-        ds["carbon_goal_group_areas"] = xr.DataArray([[True]], coords=[ds.area, ds.carbon_goal_group])
-        ds["carbon_goal_group_max"] = xr.DataArray([[value]], coords=[ds.carbon_goal_group, ds.year_op])
+        ds["carbon_goal_group_areas"] = xr.DataArray(
+            [[True]], coords=[ds.area, ds.carbon_goal_group]
+        )
+        ds["carbon_goal_group_max"] = xr.DataArray(
+            [[value]], coords=[ds.carbon_goal_group, ds.year_op]
+        )
     else:
         ds[kind] = xr.DataArray(value)
     return ds
@@ -67,7 +76,8 @@ def _solve(ds):
 
 
 def _emissions(m, condition):
-    return float(m.solution["operation_total_carbon_emissions"].sel(operating_condition=condition).sum())
+    emissions = m.solution["operation_total_carbon_emissions"]
+    return float(emissions.sel(operating_condition=condition).sum())
 
 
 @pytest.mark.parametrize("kind", GOALS)
@@ -84,7 +94,8 @@ def test_carbon_goal_per_condition_and_on_expectation(kind):
     assert _emissions(m, "a") == pytest.approx(GOAL)
     assert _emissions(m, "b") == pytest.approx(GOAL)
 
-    # flag True: one goal on the weighted emissions; a gives up its emissions (cheaper shedding), b stays above the goal
+    # flag True: one goal on the weighted emissions; a gives up its emissions (cheaper shedding), b
+    # stays above the goal
     p = with_conditions(ds, [0.5, 0.5], load_shedding_cost=shedding)
     p[flag] = True
     m = _solve(p)
@@ -102,7 +113,8 @@ def _plain_objective(demand, group=False):
 
 @pytest.mark.parametrize("group", [False, True])
 def test_carbon_tax_is_the_weighted_mean(group):
-    # emissions differ per condition (16 t and 32 t): the tax, per area or per group, is paid on the weighted mean
+    # emissions differ per condition (16 t and 32 t): the tax, per area or per group, is paid on
+    # the weighted mean
     ds = _base()
     p = with_conditions(ds, [0.25, 0.75], demand=[ds.demand, ds.demand * 2])
     if group:
@@ -111,7 +123,10 @@ def test_carbon_tax_is_the_weighted_mean(group):
     expected = 0.25 * _plain_objective(DEMAND, group) + 0.75 * _plain_objective(2 * DEMAND, group)
     assert m.objective.value == pytest.approx(expected, rel=1e-9)
     # one carbon cost per condition: the rate times that condition's emissions
-    name, rate = ("operation_carbon_tax_group_costs", 80.0) if group else ("operation_carbon_costs", 50.0)
+    if group:
+        name, rate = "operation_carbon_tax_group_costs", 80.0
+    else:
+        name, rate = "operation_carbon_costs", 50.0
     costs = m.solution[name].sum([d for d in m.solution[name].dims if d != "operating_condition"])
     assert float(costs.sel(operating_condition="a")) == pytest.approx(rate * EMISSIONS)
     assert float(costs.sel(operating_condition="b")) == pytest.approx(rate * 2 * EMISSIONS)
@@ -176,7 +191,8 @@ def test_a_weight_zero_condition_keeps_its_rows_and_costs_nothing():
     for kind in GOALS:
         p[f"{kind}_expected"] = False
     m = _solve(p)
-    assert m.objective.value == pytest.approx(_solve(_everything(_base())).objective.value, rel=1e-9)
+    reference = _solve(_everything(_base()))
+    assert m.objective.value == pytest.approx(reference.objective.value, rel=1e-9)
     for name in WITH_CONDITION:
         container = m.variables if name in m.variables else m.constraints
         assert (container[name].labels.sel(operating_condition="b") != -1).any(), name

@@ -49,6 +49,21 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
       - ['year_op']
       - float64
 
+    * - carbon_goal_area
+      - nan
+      - ['area', 'year_op']
+      - float64
+
+    * - carbon_goal_group_areas
+      - 0
+      - ['area', 'carbon_goal_group']
+      - bool
+
+    * - carbon_goal_group_max
+      - nan
+      - ['carbon_goal_group', 'year_op']
+      - float64
+
     * - carbon
       - 0
       - []
@@ -57,6 +72,16 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
     * - carbon_tax
       - nan
       - ['area', 'year_op']
+      - float64
+
+    * - carbon_tax_group_areas
+      - 0
+      - ['area', 'carbon_tax_group']
+      - bool
+
+    * - carbon_tax_group_rate
+      - nan
+      - ['carbon_tax_group', 'year_op']
       - float64
 
     * - combined
@@ -129,6 +154,26 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
       - ['area', 'combined_tech', 'mode', 'year_op']
       - float64
 
+    * - combined_power_capacity_max
+      - nan
+      - ['area', 'combined_tech', 'year_op']
+      - float64
+
+    * - combined_power_capacity_min
+      - nan
+      - ['area', 'combined_tech', 'year_op']
+      - float64
+
+    * - combined_max_load
+      - 1.0
+      - ['area', 'combined_tech', 'year_op']
+      - float64
+
+    * - combined_min_load
+      - 0.0
+      - ['area', 'combined_tech', 'year_op']
+      - float64
+
     * - combined_ramp_down
       - nan
       - ['area', 'combined_tech', 'mode', 'year_op']
@@ -139,9 +184,19 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
       - ['area', 'combined_tech', 'mode', 'year_op']
       - float64
 
+    * - combined_mode_ramp_down
+      - nan
+      - ['area', 'combined_tech', 'mode', 'year_op']
+      - float64
+
+    * - combined_mode_ramp_up
+      - nan
+      - ['area', 'combined_tech', 'mode', 'year_op']
+      - float64
+
     * - combined_variable_cost
       - 0
-      - ['area', 'combined_tech', 'mode', 'year_op']
+      - ['area', 'combined_tech', 'mode', 'operating_condition', 'year_op']
       - float64
 
     * - conversion
@@ -161,7 +216,7 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
 
     * - conversion_availability
       - nan
-      - ['area', 'conversion_tech', 'hour', 'year_op']
+      - ['area', 'conversion_tech', 'hour', 'operating_condition', 'year_op']
       - float64
 
     * - conversion_early_decommissioning
@@ -226,6 +281,21 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
 
     * - conversion_max_yearly_production
       - nan
+      - ['area', 'conversion_tech', 'operating_condition', 'year_op']
+      - float64
+
+    * - conversion_max_capacity_factor
+      - nan
+      - ['area', 'conversion_tech', 'year_op']
+      - float64
+
+    * - conversion_max_cumulative_production
+      - nan
+      - ['area', 'conversion_tech']
+      - float64
+
+    * - conversion_max_daily_production
+      - nan
       - ['area', 'conversion_tech', 'year_op']
       - float64
 
@@ -246,12 +316,12 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
 
     * - conversion_variable_cost
       - 0
-      - ['area', 'conversion_tech', 'year_op']
+      - ['area', 'conversion_tech', 'operating_condition', 'year_op']
       - float64
 
     * - load_shedding_cost
       - 0.0
-      - ['area', 'resource', 'year_op']
+      - ['area', 'resource', 'operating_condition', 'year_op']
       - float64
 
     * - load_shedding_max_capacity
@@ -261,11 +331,11 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
 
     * - demand
       - 0.0
-      - ['area', 'hour', 'resource', 'year_op']
+      - ['area', 'hour', 'resource', 'operating_condition', 'year_op']
       - float64
 
     * - discount_factor
-      - nan
+      - 1.0
       - ['year_op']
       - float64
 
@@ -281,33 +351,48 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
 
     * - net_import_emission_factor
       - 0.0
-      - ['area', 'hour', 'resource', 'year_op']
+      - ['area', 'hour', 'resource', 'operating_condition', 'year_op']
       - float64
 
     * - net_import_import_price
       - 0.0
-      - ['area', 'hour', 'resource', 'year_op']
+      - ['area', 'hour', 'resource', 'operating_condition', 'year_op']
+      - float64
+
+    * - net_import_export_price
+      - 0.0
+      - ['area', 'hour', 'resource', 'operating_condition', 'year_op']
       - float64
 
     * - net_import_max_yearly_energy_export
       - nan
-      - ['area', 'resource', 'year_op']
+      - ['area', 'resource', 'operating_condition', 'year_op']
       - float64
 
     * - net_import_max_yearly_energy_import
       - nan
-      - ['area', 'resource', 'year_op']
+      - ['area', 'resource', 'operating_condition', 'year_op']
       - float64
 
     * - net_import_total_emission_factor
       - 0.0
-      - ['area', 'hour', 'resource', 'year_op']
+      - ['area', 'hour', 'resource', 'operating_condition', 'year_op']
       - float64
 
     * - operation_year_duration
       - 8760
       - ['year_op']
       - float64
+
+    * - operation_year_weight
+      - nan
+      - ['year_op']
+      - float64
+
+    * - operation_day_duration
+      - 24
+      - []
+      - int64
 
     * - planning_step
       - 0
@@ -316,7 +401,7 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
 
     * - spillage_cost
       - 0.0
-      - ['area', 'resource', 'year_op']
+      - ['area', 'resource', 'operating_condition', 'year_op']
       - float64
 
     * - spillage_max_capacity
@@ -409,6 +494,36 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
       - ['area', 'storage_tech']
       - str
 
+    * - storage_discharge_ramp
+      - nan
+      - ['area', 'storage_tech', 'year_op']
+      - float64
+
+    * - storage_charge_ramp
+      - nan
+      - ['area', 'storage_tech', 'year_op']
+      - float64
+
+    * - storage_energy_capacity_max
+      - nan
+      - ['area', 'storage_tech', 'year_op']
+      - float64
+
+    * - storage_energy_capacity_min
+      - nan
+      - ['area', 'storage_tech', 'year_op']
+      - float64
+
+    * - storage_power_capacity_max
+      - nan
+      - ['area', 'storage_tech', 'year_op']
+      - float64
+
+    * - storage_power_capacity_min
+      - nan
+      - ['area', 'storage_tech', 'year_op']
+      - float64
+
     * - storage_energy_capacity_investment_max
       - nan
       - ['area', 'storage_tech', 'year_inv']
@@ -427,6 +542,16 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
     * - storage_power_capacity_investment_min
       - nan
       - ['area', 'storage_tech', 'year_inv']
+      - float64
+
+    * - storage_energy_power_ratio
+      - nan
+      - ['area', 'storage_tech']
+      - float64
+
+    * - storage_energy_to_power_min
+      - nan
+      - ['area', 'storage_tech', 'year_op']
       - float64
 
     * - time_step_duration
@@ -481,7 +606,7 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
 
     * - transport_hurdle_costs
       - nan
-      - ['link', 'transport_tech', 'year_op']
+      - ['link', 'transport_tech', 'operating_condition', 'year_op']
       - float64
 
     * - transport_invest_cost
@@ -504,10 +629,65 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
       - ['link', 'transport_tech', 'year_inv']
       - float64
 
+    * - transport_power_capacity_max
+      - nan
+      - ['link', 'transport_tech', 'year_op']
+      - float64
+
+    * - transport_linepack_capacity
+      - nan
+      - ['link', 'transport_tech', 'year_op']
+      - float64
+
+    * - transport_delay
+      - 0.0
+      - ['link', 'transport_tech']
+      - float64
+
+    * - transport_power_capacity_min
+      - nan
+      - ['link', 'transport_tech', 'year_op']
+      - float64
+
     * - transport_resource
       - nan
       - ['link', 'transport_tech']
       - str
+
+    * - transport_efficiency
+      - 1.0
+      - ['link', 'transport_tech', 'year_op']
+      - float64
+
+    * - transport_fuel_consumption
+      - nan
+      - ['link', 'transport_tech', 'year_op']
+      - float64
+
+    * - transport_fuel_area
+      - nan
+      - ['link', 'transport_tech']
+      - str
+
+    * - transport_fuel_resource
+      - nan
+      - ['link', 'transport_tech']
+      - str
+
+    * - transport_availability
+      - nan
+      - ['link', 'transport_tech', 'hour', 'operating_condition', 'year_op']
+      - float64
+
+    * - transport_ramp_down
+      - nan
+      - ['link', 'transport_tech', 'year_op']
+      - float64
+
+    * - transport_ramp_up
+      - nan
+      - ['link', 'transport_tech', 'year_op']
+      - float64
 
     * - turpe
       - 0
@@ -534,47 +714,527 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
       - []
       - int64
 
-    * - retrofit
-      - 0.0
+    * - retrofit_conversion
+      - 0
       - []
       - bool
 
-    * - retrofit_tech_from
-      - ""
-      - ['area']
+    * - retrofit_conversion_tech_from
+      - None
+      - ['retrofit_conversion_pair']
       - str
 
-    * - retrofit_tech_to
-      - ""
-      - ['area']
+    * - retrofit_conversion_tech_to
+      - None
+      - ['retrofit_conversion_pair']
       - str
 
-    * - retrofit_year
-      - nan
-      - ['year_op']
+    * - retrofit_conversion_life_span
+      - 0
+      - ['area', 'retrofit_conversion_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_conversion_end_of_life
+      - 0
+      - ['area', 'retrofit_conversion_pair', 'year_ret', 'year_inv']
       - int64
 
-    * - retrofit_factor
+    * - retrofit_conversion_finance_rate
+      - 0.0
+      - ['area', 'retrofit_conversion_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_conversion_invest_cost
+      - 0
+      - ['area', 'retrofit_conversion_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_conversion_annuity_cost
+      - nan
+      - ['area', 'retrofit_conversion_pair', 'year_dec', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_conversion_annuity_perfect_foresight
+      - 0
+      - ['area', 'retrofit_conversion_pair', 'year_ret', 'year_inv']
+      - bool
+
+    * - retrofit_conversion_early_decommissioning
+      - 0
+      - ['area', 'retrofit_conversion_pair', 'year_ret', 'year_inv']
+      - bool
+
+    * - retrofit_conversion_ret_ratio
       - 1.0
-      - ['area','year_inv','retrofit_tech_from','retrofit_tech_to']
+      - ['area', 'retrofit_conversion_pair', 'year_ret', 'year_inv']
       - float64
 
-    * - retrofit_invest_cost
-      - 0.0
-      - ['area','year_op','retrofit_tech_from','retrofit_tech_to', 'retrofit_year', 'year_dec']
+    * - retrofit_conversion_eligible_share
+      - 1.0
+      - ['area', 'conversion_tech', 'year_ret', 'year_inv']
       - float64
 
-    * - retrofit_finance_rate
-      - 0.0
-      - ['area','retrofit_tech_from','retrofit_tech_to', 'retrofit_year']
-      - float64
-
-    * - retrofit_power_capacity_investment_min
+    * - retrofit_conversion_power_capacity_investment_min
       - nan
-      - ['retrofit_tech_to', 'retrofit_year']
+      - ['area', 'retrofit_conversion_pair', 'year_ret', 'year_inv']
       - float64
 
-    * - retrofit_power_capacity_investment_max
+    * - retrofit_conversion_power_capacity_investment_max
       - nan
-      - ['retrofit_tech_to', 'retrofit_year']
+      - ['area', 'retrofit_conversion_pair', 'year_ret', 'year_inv']
       - float64
+
+    * - retrofit_combined
+      - 0
+      - []
+      - bool
+
+    * - retrofit_combined_tech_from
+      - None
+      - ['retrofit_combined_pair']
+      - str
+
+    * - retrofit_combined_tech_to
+      - None
+      - ['retrofit_combined_pair']
+      - str
+
+    * - retrofit_combined_life_span
+      - 0
+      - ['area', 'retrofit_combined_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_combined_end_of_life
+      - 0
+      - ['area', 'retrofit_combined_pair', 'year_ret', 'year_inv']
+      - int64
+
+    * - retrofit_combined_finance_rate
+      - 0.0
+      - ['area', 'retrofit_combined_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_combined_invest_cost
+      - 0
+      - ['area', 'retrofit_combined_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_combined_annuity_cost
+      - nan
+      - ['area', 'retrofit_combined_pair', 'year_dec', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_combined_annuity_perfect_foresight
+      - 0
+      - ['area', 'retrofit_combined_pair', 'year_ret', 'year_inv']
+      - bool
+
+    * - retrofit_combined_early_decommissioning
+      - 0
+      - ['area', 'retrofit_combined_pair', 'year_ret', 'year_inv']
+      - bool
+
+    * - retrofit_combined_ret_ratio
+      - 1.0
+      - ['area', 'retrofit_combined_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_combined_eligible_share
+      - 1.0
+      - ['area', 'combined_tech', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_combined_power_capacity_investment_min
+      - nan
+      - ['area', 'retrofit_combined_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_combined_power_capacity_investment_max
+      - nan
+      - ['area', 'retrofit_combined_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_storage
+      - 0
+      - []
+      - bool
+
+    * - retrofit_storage_tech_from
+      - None
+      - ['retrofit_storage_pair']
+      - str
+
+    * - retrofit_storage_tech_to
+      - None
+      - ['retrofit_storage_pair']
+      - str
+
+    * - retrofit_storage_life_span
+      - 0
+      - ['area', 'retrofit_storage_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_storage_end_of_life
+      - 0
+      - ['area', 'retrofit_storage_pair', 'year_ret', 'year_inv']
+      - int64
+
+    * - retrofit_storage_finance_rate
+      - 0.0
+      - ['area', 'retrofit_storage_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_storage_invest_cost_power
+      - 0
+      - ['area', 'retrofit_storage_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_storage_invest_cost_energy
+      - 0
+      - ['area', 'retrofit_storage_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_storage_annuity_cost_power
+      - nan
+      - ['area', 'retrofit_storage_pair', 'year_dec', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_storage_annuity_cost_energy
+      - nan
+      - ['area', 'retrofit_storage_pair', 'year_dec', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_storage_annuity_perfect_foresight
+      - 0
+      - ['area', 'retrofit_storage_pair', 'year_ret', 'year_inv']
+      - bool
+
+    * - retrofit_storage_early_decommissioning
+      - 0
+      - ['area', 'retrofit_storage_pair', 'year_ret', 'year_inv']
+      - bool
+
+    * - retrofit_storage_ret_ratio_power
+      - 1.0
+      - ['area', 'retrofit_storage_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_storage_ret_ratio_energy
+      - 1.0
+      - ['area', 'retrofit_storage_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_storage_eligible_share
+      - 1.0
+      - ['area', 'storage_tech', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_storage_power_capacity_investment_min
+      - nan
+      - ['area', 'retrofit_storage_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_storage_power_capacity_investment_max
+      - nan
+      - ['area', 'retrofit_storage_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_storage_energy_capacity_investment_min
+      - nan
+      - ['area', 'retrofit_storage_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_storage_energy_capacity_investment_max
+      - nan
+      - ['area', 'retrofit_storage_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_transport
+      - 0
+      - []
+      - bool
+
+    * - retrofit_transport_tech_from
+      - None
+      - ['retrofit_transport_pair']
+      - str
+
+    * - retrofit_transport_tech_to
+      - None
+      - ['retrofit_transport_pair']
+      - str
+
+    * - retrofit_transport_life_span
+      - 0
+      - ['link', 'retrofit_transport_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_transport_end_of_life
+      - 0
+      - ['link', 'retrofit_transport_pair', 'year_ret', 'year_inv']
+      - int64
+
+    * - retrofit_transport_finance_rate
+      - 0.0
+      - ['link', 'retrofit_transport_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_transport_invest_cost
+      - 0
+      - ['link', 'retrofit_transport_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_transport_annuity_cost
+      - nan
+      - ['link', 'retrofit_transport_pair', 'year_dec', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_transport_annuity_perfect_foresight
+      - 0
+      - ['link', 'retrofit_transport_pair', 'year_ret', 'year_inv']
+      - bool
+
+    * - retrofit_transport_early_decommissioning
+      - 0
+      - ['link', 'retrofit_transport_pair', 'year_ret', 'year_inv']
+      - bool
+
+    * - retrofit_transport_ret_ratio
+      - 1.0
+      - ['link', 'retrofit_transport_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_transport_eligible_share
+      - 1.0
+      - ['link', 'transport_tech', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_transport_power_capacity_investment_min
+      - nan
+      - ['link', 'retrofit_transport_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - retrofit_transport_power_capacity_investment_max
+      - nan
+      - ['link', 'retrofit_transport_pair', 'year_ret', 'year_inv']
+      - float64
+
+    * - process
+      - 0
+      - []
+      - bool
+
+    * - process_annuity_perfect_foresight
+      - 0
+      - ['area', 'process_tech', 'year_inv']
+      - bool
+
+    * - process_annuity_cost
+      - nan
+      - ['area', 'process_tech', 'year_dec', 'year_inv']
+      - float64
+
+    * - process_early_decommissioning
+      - 0
+      - ['area', 'process_tech', 'year_inv']
+      - bool
+
+    * - process_emission_factor
+      - 0.0
+      - ['area', 'process_tech', 'mode', 'year_op']
+      - float64
+
+    * - process_end_of_life
+      - 0
+      - ['area', 'process_tech', 'year_inv']
+      - int64
+
+    * - process_factor
+      - 0.0
+      - ['area', 'process_tech', 'mode', 'resource', 'year_op']
+      - float64
+
+    * - process_finance_rate
+      - 0.0
+      - ['area', 'process_tech', 'year_inv']
+      - float64
+
+    * - process_fixed_cost
+      - 0
+      - ['area', 'process_tech', 'year_op']
+      - float64
+
+    * - process_invest_cost
+      - 0
+      - ['area', 'process_tech', 'year_inv']
+      - float64
+
+    * - process_life_span
+      - nan
+      - ['area', 'process_tech', 'year_inv']
+      - float64
+
+    * - process_power_capacity_investment_max
+      - nan
+      - ['area', 'process_tech', 'year_inv']
+      - float64
+
+    * - process_power_capacity_investment_min
+      - nan
+      - ['area', 'process_tech', 'year_inv']
+      - float64
+
+    * - process_power_capacity_max
+      - nan
+      - ['area', 'process_tech', 'year_op']
+      - float64
+
+    * - process_power_capacity_min
+      - nan
+      - ['area', 'process_tech', 'year_op']
+      - float64
+
+    * - process_unit_size
+      - 0
+      - ['area', 'process_tech', 'year_op']
+      - float64
+
+    * - process_max_load
+      - 1.0
+      - ['area', 'process_tech', 'year_op']
+      - float64
+
+    * - process_min_load
+      - 0.0
+      - ['area', 'process_tech', 'year_op']
+      - float64
+
+    * - process_startup_cost
+      - 0
+      - ['area', 'process_tech', 'year_op']
+      - float64
+
+    * - process_shutdown_cost
+      - 0
+      - ['area', 'process_tech', 'year_op']
+      - float64
+
+    * - process_minimum_startup_time
+      - 0
+      - ['area', 'process_tech', 'year_op']
+      - int64
+
+    * - process_minimum_shutdown_time
+      - 0
+      - ['area', 'process_tech', 'year_op']
+      - int64
+
+    * - process_ramp_down
+      - nan
+      - ['area', 'process_tech', 'mode', 'year_op']
+      - float64
+
+    * - process_ramp_up
+      - nan
+      - ['area', 'process_tech', 'mode', 'year_op']
+      - float64
+
+    * - process_mode_ramp_down
+      - nan
+      - ['area', 'process_tech', 'mode', 'year_op']
+      - float64
+
+    * - process_mode_ramp_up
+      - nan
+      - ['area', 'process_tech', 'mode', 'year_op']
+      - float64
+
+    * - process_no_shutdown
+      - 0
+      - ['area', 'process_tech', 'year_op']
+      - bool
+
+    * - process_variable_cost
+      - 0
+      - ['area', 'process_tech', 'mode', 'operating_condition', 'year_op']
+      - float64
+
+    * - flexdem
+      - 0
+      - []
+      - bool
+
+    * - flexdem_demand
+      - 0.0
+      - ['area', 'hour', 'resource', 'operating_condition', 'year_op']
+      - float64
+
+    * - flexdem_conservation_hrs
+      - 0
+      - ['area', 'resource', 'year_op']
+      - int64
+
+    * - flexdem_window_offset_hrs
+      - 0.0
+      - []
+      - float64
+
+    * - flexdem_shifted_energy_initial
+      - 0.0
+      - ['area', 'resource', 'year_op']
+      - float64
+
+    * - flexdem_ramp_up
+      - nan
+      - ['area', 'resource', 'year_op']
+      - float64
+
+    * - flexdem_ramp_down
+      - nan
+      - ['area', 'resource', 'year_op']
+      - float64
+
+    * - flexdem_maxload_ratio
+      - 1.0
+      - ['area', 'resource', 'year_op']
+      - float64
+
+    * - flexdem_minload_ratio
+      - 1.0
+      - ['area', 'resource', 'year_op']
+      - float64
+
+    * - operating_condition_weight
+      - nan
+      - ['operating_condition', 'year_op']
+      - float64
+
+    * - carbon_goal_expected
+      - 0
+      - []
+      - bool
+
+    * - carbon_goal_area_expected
+      - 0
+      - []
+      - bool
+
+    * - carbon_goal_group_expected
+      - 0
+      - []
+      - bool
+
+    * - conversion_max_yearly_production_expected
+      - 0
+      - []
+      - bool
+
+    * - net_import_max_yearly_energy_import_expected
+      - 0
+      - []
+      - bool
+
+    * - net_import_max_yearly_energy_export_expected
+      - 0
+      - []
+      - bool

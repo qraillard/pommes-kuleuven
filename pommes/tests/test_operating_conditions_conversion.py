@@ -1,7 +1,8 @@
 """Operating conditions in the conversion module.
 
-One area, four hours, electricity only, no shedding allowed unless stated: the demand is covered by `ocgt`
-(45 per MWh) and `hydro_ror` (free, nearly free capacity) so every optimum is checkable by hand.
+One area, four hours, electricity only, no shedding allowed unless stated: the demand is covered by
+`ocgt` (45 per MWh) and `hydro_ror` (free, nearly free capacity) so every optimum is checkable by
+hand.
 """
 import numpy as np
 import pytest
@@ -142,7 +143,8 @@ def test_weight_zero_without_shedding_still_sets_the_capacity():
         with_conditions(ds, [1.0, 0.0], demand=[ds.demand * 1.0, ds.demand * 3.0])
     )
     assert _capacity(m, "ocgt") == pytest.approx(3 * DEMAND)
-    # the objective counts a's operation only: the cost of the capacity for b's demand plus a's fuel
+    # the objective counts a's operation only: the cost of the capacity for b's demand plus a's
+    # fuel
     reference_b = _solve(_with_scaled_demand(ds, 3.0))
     fuel_b = 45.0 * 3 * DEMAND * N_HOURS
     fuel_a = 45.0 * DEMAND * N_HOURS

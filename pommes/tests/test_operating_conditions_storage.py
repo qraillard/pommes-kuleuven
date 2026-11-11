@@ -1,7 +1,8 @@
 """Operating conditions in the storage module.
 
-One area, four hours, electricity only. A run-of-river plant of fixed size (20 MW) is the only source; the demand is
-10 MW. A battery with unit efficiencies and no dissipation moves energy inside a condition, never between two.
+One area, four hours, electricity only. A run-of-river plant of fixed size (20 MW) is the only
+source; the demand is 10 MW. A battery with unit efficiencies and no dissipation moves energy
+inside a condition, never between two.
 """
 import numpy as np
 import pytest
@@ -53,7 +54,8 @@ def _availability(ds, values):
 
 
 def _two_conditions(ds, weights=(0.5, 0.5)):
-    # a: the plant runs in the first two hours (a surplus), then stops (a deficit); b: it never runs
+    # a: the plant runs in the first two hours (a surplus), then stops (a deficit); b: it never
+    # runs
     return with_conditions(
         ds,
         list(weights),

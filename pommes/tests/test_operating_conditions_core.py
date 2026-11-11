@@ -1,7 +1,8 @@
 """Operating conditions in the core: load shedding, spillage, adequacy, objective.
 
-Only load shedding is active (one area, one year, every module off): the optimum is plain shedding of the demand,
-unbounded, so the objective is linear in the demand and the weighted mean of two conditions is checkable by hand.
+Only load shedding is active (one area, one year, every module off): the optimum is plain shedding
+of the demand, unbounded, so the objective is linear in the demand and the weighted mean of two
+conditions is checkable by hand.
 """
 import numpy as np
 import pytest
@@ -72,7 +73,8 @@ def test_an_absent_pair_has_no_row():
 def test_weight_zero_costs_nothing():
     m = _solve(_two_conditions([1.0, 0.0], scales=(1.0, 3.0)))
     assert m.objective.value == pytest.approx(_cost(1.0), rel=1e-9)
-    # kept with its constraints (weight 0 is not absent): rows exist and shed the whole demand at zero cost
+    # kept with its constraints (weight 0 is not absent): rows exist and shed the whole demand at
+    # zero cost
     labels = m.constraints["operation_adequacy_constraint"].labels
     assert (labels.sel(operating_condition="b") != -1).all()
     shed = m.solution["operation_load_shedding_power"]

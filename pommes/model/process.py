@@ -400,7 +400,13 @@ def add_process(
         + p.process_min_load * p.process_unit_size * operation_process_shutdown
         <= 0,
         name="operation_process_ramp_up_constraint",
-        mask=condition_mask(p, np.isfinite(process_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size)* (p.process_unit_size > 0)),
+        mask=condition_mask(
+            p,
+            np.isfinite(process_ramp_up)
+            * (p.hour != p.hour[0])
+            * np.isfinite(p.process_unit_size)
+            * (p.process_unit_size > 0),
+        ),
     )
 
     m.add_constraints(
@@ -429,8 +435,13 @@ def add_process(
         - startup_capability * capacity_bound * operation_process_startup
         <= 0,
         name="operation_process_ramp_up_constraint_no_unit_size",
-        mask=condition_mask(p, np.isfinite(process_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (
-                    p.process_unit_size <= 0)),
+        mask=condition_mask(
+            p,
+            np.isfinite(process_ramp_up)
+            * (p.hour != p.hour[0])
+            * np.isfinite(p.process_unit_size)
+            * (p.process_unit_size <= 0),
+        ),
     )
 
     m.add_constraints(
@@ -442,7 +453,13 @@ def add_process(
         + p.process_min_load * p.process_unit_size * operation_process_startup
         <= 0,
         name="operation_process_ramp_down_constraint",
-        mask=condition_mask(p, np.isfinite(process_ramp_down) * (p.hour != p.hour[0])* np.isfinite(p.process_unit_size)* (p.process_unit_size > 0)),
+        mask=condition_mask(
+            p,
+            np.isfinite(process_ramp_down)
+            * (p.hour != p.hour[0])
+            * np.isfinite(p.process_unit_size)
+            * (p.process_unit_size > 0),
+        ),
     )
 
     m.add_constraints(
@@ -453,8 +470,13 @@ def add_process(
         - shutdown_capability * capacity_bound * operation_process_shutdown
         <= 0,
         name="operation_process_ramp_down_constraint_no_unit_size",
-        mask=condition_mask(p, np.isfinite(process_ramp_down) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (
-                    p.process_unit_size <= 0)),
+        mask=condition_mask(
+            p,
+            np.isfinite(process_ramp_down)
+            * (p.hour != p.hour[0])
+            * np.isfinite(p.process_unit_size)
+            * (p.process_unit_size <= 0),
+        ),
     )
 
     # Optional, opt-in: limits how fast the split between modes shifts,
@@ -488,7 +510,13 @@ def add_process(
             - process_mode_ramp_up * p.process_unit_size * operation_process_state
             <= 0,
             name=f"operation_process_mode_ramp_up_constraint_{mode_a}_{mode_b}",
-            mask=condition_mask(p, np.isfinite(process_mode_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size > 0)),
+            mask=condition_mask(
+                p,
+                np.isfinite(process_mode_ramp_up)
+                * (p.hour != p.hour[0])
+                * np.isfinite(p.process_unit_size)
+                * (p.process_unit_size > 0),
+            ),
         )
 
         m.add_constraints(
@@ -496,7 +524,13 @@ def add_process(
             - process_mode_ramp_up * operation_process_power_capacity
             <= 0,
             name=f"operation_process_mode_ramp_up_constraint_no_unit_size_{mode_a}_{mode_b}",
-            mask=condition_mask(p, np.isfinite(process_mode_ramp_up) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size <= 0)),
+            mask=condition_mask(
+                p,
+                np.isfinite(process_mode_ramp_up)
+                * (p.hour != p.hour[0])
+                * np.isfinite(p.process_unit_size)
+                * (p.process_unit_size <= 0),
+            ),
         )
 
         m.add_constraints(
@@ -504,7 +538,13 @@ def add_process(
             - process_mode_ramp_down * p.process_unit_size * operation_process_state
             <= 0,
             name=f"operation_process_mode_ramp_down_constraint_{mode_a}_{mode_b}",
-            mask=condition_mask(p, np.isfinite(process_mode_ramp_down) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size > 0)),
+            mask=condition_mask(
+                p,
+                np.isfinite(process_mode_ramp_down)
+                * (p.hour != p.hour[0])
+                * np.isfinite(p.process_unit_size)
+                * (p.process_unit_size > 0),
+            ),
         )
 
         m.add_constraints(
@@ -512,29 +552,60 @@ def add_process(
             - process_mode_ramp_down * operation_process_power_capacity
             <= 0,
             name=f"operation_process_mode_ramp_down_constraint_no_unit_size_{mode_a}_{mode_b}",
-            mask=condition_mask(p, np.isfinite(process_mode_ramp_down) * (p.hour != p.hour[0]) * np.isfinite(p.process_unit_size) * (p.process_unit_size <= 0)),
+            mask=condition_mask(
+                p,
+                np.isfinite(process_mode_ramp_down)
+                * (p.hour != p.hour[0])
+                * np.isfinite(p.process_unit_size)
+                * (p.process_unit_size <= 0),
+            ),
         )
 
     m.add_constraints(operation_process_state - operation_process_nb_units <= 0,
-                      name="operation_process_state_nb_units", mask=condition_mask(p, np.isfinite(p.process_unit_size) * (p.process_unit_size > 0 ) * (p.process_no_shutdown == False)))
+                      name="operation_process_state_nb_units",
+                      mask=condition_mask(
+                          p,
+                          np.isfinite(p.process_unit_size)
+                          * (p.process_unit_size > 0)
+                          * (p.process_no_shutdown == False),
+                      ))
 
     m.add_constraints(operation_process_state - operation_process_nb_units == 0,
                       name="operation_process_no_shutdown_constraint",
-                      mask=condition_mask(p, np.isfinite(p.process_unit_size) * (p.process_unit_size > 0) * (p.process_no_shutdown == True)))
+                      mask=condition_mask(
+                          p,
+                          np.isfinite(p.process_unit_size)
+                          * (p.process_unit_size > 0)
+                          * (p.process_no_shutdown == True),
+                      ))
 
 
     m.add_constraints(operation_process_state - 1 == 0,
                       name="operation_process_no_shutdown_constraint_no_unit_size",
-                      mask=condition_mask(p, np.isfinite(p.process_unit_size) * (p.process_unit_size == 0) * (p.process_no_shutdown == True)))
+                      mask=condition_mask(
+                          p,
+                          np.isfinite(p.process_unit_size)
+                          * (p.process_unit_size == 0)
+                          * (p.process_no_shutdown == True),
+                      ))
 
     m.add_constraints(operation_process_startup - operation_process_nb_units <= 0,
                       name="operation_process_startup_nb_units_constraint",
-                      mask=condition_mask(p, np.isfinite(p.process_unit_size) * (p.process_unit_size > 0)))
+                      mask=condition_mask(
+                          p,
+                          np.isfinite(p.process_unit_size)
+                          * (p.process_unit_size > 0),
+                      ))
 
     # state is the state after the step (state_def), so the units that can stop are those on before it
     m.add_constraints(operation_process_shutdown - operation_process_state.shift(hour=1) <= 0, #cannot stop more units than the ones already on
                       name="operation_process_shutdown_nb_units_constraint",
-                      mask=condition_mask(p, np.isfinite(p.process_unit_size) * (p.process_unit_size > 0) * (p.hour != p.hour[0])))
+                      mask=condition_mask(
+                          p,
+                          np.isfinite(p.process_unit_size)
+                          * (p.process_unit_size > 0)
+                          * (p.hour != p.hour[0]),
+                      ))
 
     m.add_constraints(operation_process_nb_units <= 1, #if no process unit size specified, only 1 unit can be installed
                       name="operation_process_nb_units_max_if_no_unit_size_constraint",

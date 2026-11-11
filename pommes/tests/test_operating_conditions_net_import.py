@@ -1,7 +1,7 @@
 """Operating conditions in the net import module.
 
-One area, three hours, electricity only: wind is switched off, so the demand is covered by imports (or shed at a high
-cost) and every optimum is checkable by hand.
+One area, three hours, electricity only: wind is switched off, so the demand is covered by imports
+(or shed at a high cost) and every optimum is checkable by hand.
 """
 import numpy as np
 import pytest

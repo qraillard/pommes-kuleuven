@@ -1,7 +1,7 @@
 """Operating conditions in the transport module.
 
-Two areas joined by two links (link_1 from area_1 to area_2, link_2 back), one electricity line, wind in both areas.
-The demand and the wind move between the areas from one condition to the other.
+Two areas joined by two links (link_1 from area_1 to area_2, link_2 back), one electricity line,
+wind in both areas. The demand and the wind move between the areas from one condition to the other.
 """
 import numpy as np
 import pytest
@@ -114,7 +114,8 @@ def test_flows_differ_by_condition_on_a_shared_line(p_base):
 def test_delay_stays_inside_each_condition(p_base):
     p = p_base.copy(deep=True)
     p["transport_delay"] = 1.0
-    # only area_2 consumes, in every hour; a: area_1 produces in the last hour only; b: it never produces
+    # only area_2 consumes, in every hour; a: area_1 produces in the last hour only; b: it never
+    # produces
     off = [0.0] * 3
     p = with_conditions(
         p,
@@ -163,14 +164,18 @@ def _with_linepack(p, delay=False):
     # a finite linepack on link_1 builds the linepack rows and the power-in bound
     p = p.copy(deep=True)
     p["transport_linepack_capacity"] = xr.DataArray(
-        [[5.0]], dims=("link", "transport_tech"), coords=dict(link=["link_1"], transport_tech=p.transport_tech)
+        [[5.0]],
+        dims=("link", "transport_tech"),
+        coords=dict(link=["link_1"], transport_tech=p.transport_tech),
     ).reindex(link=p.link)
     if not delay:
         return p
     # a one-hour delay on link_2 (no linepack there) builds the delayed power-in rows
     # (and leaves no link for the plain power-in definition, hence the two datasets)
     p["transport_delay"] = xr.DataArray(
-        [[0.0], [1.0]], dims=("link", "transport_tech"), coords=dict(link=["link_1", "link_2"], transport_tech=p.transport_tech)
+        [[0.0], [1.0]],
+        dims=("link", "transport_tech"),
+        coords=dict(link=["link_1", "link_2"], transport_tech=p.transport_tech),
     ).reindex(link=p.link, fill_value=0.0)
     return p
 
@@ -220,7 +225,8 @@ def test_weight_zero_condition_adds_nothing_to_the_objective_but_keeps_its_flows
     )
     assert m.objective.value == pytest.approx(_solve(a).objective.value, rel=1e-9)
     # b keeps its rows; link_2 has no capacity (sized for a only), so b's demand is shed
-    assert (m.constraints["operation_transport_power_max_constraint"].labels.sel(operating_condition="b") != -1).any()
+    labels = m.constraints["operation_transport_power_max_constraint"].labels
+    assert (labels.sel(operating_condition="b") != -1).any()
     shed_b = m.solution["operation_load_shedding_power"].sel(operating_condition="b")
     assert float(shed_b.sum()) > 0
 def test_identical_conditions_leave_the_objective_unchanged(p_base):

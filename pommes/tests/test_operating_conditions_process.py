@@ -1,8 +1,9 @@
 """Operating conditions in the process module.
 
-One area, one year, methane (bought by shedding at 5 per MWh) turned into heat by process units of 1 MW that run at
-their size or not at all (min load = max load = 1, heat shedding at 1000). The integer commitment variables are
-per condition, so a unit can start in one condition and stay off in the other.
+One area, one year, methane (bought by shedding at 5 per MWh) turned into heat by process units of
+1 MW that run at their size or not at all (min load = max load = 1, heat shedding at 1000). The
+integer commitment variables are per condition, so a unit can start in one condition and stay off
+in the other.
 """
 import warnings
 

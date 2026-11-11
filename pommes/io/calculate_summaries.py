@@ -6,6 +6,8 @@ import pandas as pd
 from pandas import DataFrame
 from xarray import DataArray, Dataset
 
+from pommes.utils import OPERATING_CONDITION
+
 
 def simplify_from_postfix(
     dataset: DataFrame | Dataset, postfixes: list[str], name: str
@@ -430,6 +432,16 @@ def calculate_total_of_a_type(
     the sum is computed by year_op and by area but two parameters allow
     to modify that.
 
+    With operating conditions, the totals are never summed over
+    `operating_condition`: each one comes per condition (the weighted mean is
+    `expected_over_conditions` of the table). Capacities, shared by the
+    conditions, have no condition; costs and emissions shared by the
+    conditions (planning costs, TURPE fixed cost) are repeated in each, so the
+    cost of a condition is its planning costs plus its operation costs. In a
+    condition of weight 0 the cost variables defined by inequalities
+    (`operation_carbon_costs`, `operation_carbon_tax_group_costs`) are not
+    tight: their values there are bounds, not costs.
+
     Note:
         - `type` can be 'power_capacity'
         - `operation_or_planning` should be "operation" or "planning"
@@ -487,6 +499,22 @@ def calculate_total_of_a_type(
             sum_dims = get_sum_dims(solution[var], by_year_op, by_area)
 
             calculated_total = solution[var].sum(dim=sum_dims)
+            if (
+                OPERATING_CONDITION in solution.coords
+                and OPERATING_CONDITION not in calculated_total.dims
+                and type != "power_capacity"
+            ):
+                # Planning costs (and the TURPE fixed cost) are shared by the
+                # conditions: repeated in each one, so that the cost of a
+                # condition is planning + operation.
+                calculated_total = calculated_total.expand_dims(
+                    {OPERATING_CONDITION: solution[OPERATING_CONDITION].values}
+                )
+            if OPERATING_CONDITION in calculated_total.dims:
+                # Last, as the other index levels are concatenated by position.
+                calculated_total = calculated_total.transpose(
+                    ..., OPERATING_CONDITION
+                )
             if type == "costs" and variable_name == "net_import":
                 calculated_total = calculated_total.rename(
                     {"resource": "tech"}
@@ -509,6 +537,13 @@ def calculate_total_of_a_type(
             )
             calculated_total = calculated_total.to_dataframe()
             calculated_total_dict[variable_name] = calculated_total
+
+        # The levels are concatenated by position and named after the first
+        # table: put every table's levels in the order of the first one.
+        names = list(calculated_total_dict.values())[0].index.names
+        for key, table in calculated_total_dict.items():
+            if table.index.nlevels > 1 and set(table.index.names) == set(names):
+                calculated_total_dict[key] = table.reorder_levels(names)
 
         combined_df = pd.concat(
             calculated_total_dict.values(),

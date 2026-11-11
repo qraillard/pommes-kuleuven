@@ -41,7 +41,7 @@ def with_conditions(
 
 
 def assert_condition_dims_consistent(m):
-    """Every constraint's terms carry no dimension its rows lack (a missed expectation at an ``lhs +=``)."""
+    """No constraint has terms with a dimension its rows lack (a missed ``lhs +=`` expectation)."""
     bad = [
         n
         for n in m.constraints

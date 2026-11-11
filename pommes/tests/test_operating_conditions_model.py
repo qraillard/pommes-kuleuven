@@ -1,7 +1,8 @@
 """Operating conditions on the whole model (every module together).
 
-Structure (which variables and constraints carry the dimension), neutrality of identical conditions, absent pairs
-walked over every variable and constraint, the pseudo-year reference and the two-stage decomposition of the objective.
+Structure (which variables and constraints carry the dimension), neutrality of identical
+conditions, absent pairs walked over every variable and constraint, the pseudo-year reference and
+the two-stage decomposition of the objective.
 """
 import numpy as np
 import pytest
@@ -34,7 +35,9 @@ FLAGS = [
 
 
 def _full(parameters, process):
-    """Every module: the parameters, the process fixture, a flexible demand and finite annual ceilings."""
+    """Every module: the parameters, the process fixture, a flexible demand and finite annual
+    ceilings.
+    """
     p = xr.merge([parameters, process])
     flexible = xr.zeros_like(
         p.demand.broadcast_like(p.area).broadcast_like(p.hour)
@@ -88,7 +91,7 @@ def _solve(p, guard=True):
     return m
 
 
-# --- 1. what carries the dimension ---------------------------------------------------------------------------------
+# --- 1. what carries the dimension ---------------------------------------------------------------
 
 CAPACITIES = [
     f"operation_{module}_power_capacity"
@@ -157,14 +160,15 @@ def test_every_operational_variable_has_the_condition(full, flags):
         elif hourly or cost:
             assert C in dims or name in WITHOUT_CONDITION_VARIABLES, name
     assert _without_condition(m.variables) == WITHOUT_CONDITION_VARIABLES
-    # constraints: exactly the capacity, planning, totex, nb_units and TURPE contract rows lack the dimension
+    # constraints: exactly the capacity, planning, totex, nb_units and TURPE contract rows lack the
+    # dimension
     expected = WITHOUT_CONDITION_CONSTRAINTS | (
         EXPECTED_ANNUAL_CONSTRAINTS if flags else set()
     )
     assert _without_condition(m.constraints) == expected
 
 
-# --- 2. identical conditions are neutral ---------------------------------------------------------------------------
+# --- 2. identical conditions are neutral ---------------------------------------------------------
 
 
 def _capacities(m):
@@ -186,23 +190,26 @@ def _assert_neutral(p, weights, capacities=True):
 
 
 def test_identical_conditions_are_neutral_on_test_case(full):
-    # the optimum of test_case is degenerate in its capacities (its operational costs are almost all zero: another
-    # conversion or storage capacity costs the same in total), so only the objective is compared
+    # the optimum of test_case is degenerate in its capacities (its operational costs are almost
+    # all zero: another conversion or storage capacity costs the same in total), so only the
+    # objective is compared
     _assert_neutral(full, [0.5, 0.3, 0.2], capacities=False)
 
 
 def test_identical_conditions_are_neutral_on_nnodes():
-    # three areas: combined and storage capacities and their fixed costs, and the folding over areas, are real here
-    # (build_nnode_parameters has no transport technology: transport is in the whole model of test_case, and in the
-    # transport file)
+    # three areas: combined and storage capacities and their fixed costs, and the folding over
+    # areas, are real here (build_nnode_parameters has no transport technology: transport is in the
+    # whole model of test_case, and in the transport file)
     _assert_neutral(build_nnode_parameters(n_areas=3, n_hours=24), [0.5, 0.3, 0.2])
 
 
-# --- 3. an absent pair in the full model ---------------------------------------------------------------------------
+# --- 3. an absent pair in the full model ---------------------------------------------------------
 
 
 def _assert_rows(m, reference, absent):
-    """Every variable and constraint has the rows of the reference minus the absent (year_op, condition) pairs."""
+    """Every variable and constraint has the rows of the reference minus the absent (year_op,
+    condition) pairs.
+    """
     for kind in ("variables", "constraints"):
         items, ref_items = getattr(m, kind), getattr(reference, kind)
         assert set(items) == set(ref_items)
@@ -242,8 +249,8 @@ def test_an_absent_pair_in_one_year_of_the_full_model(full, flags):
     year = int(full.year_op[1])
     weights = np.full((full.sizes["year_op"], 2), 0.5)
     weights[1] = [1.0, np.nan]
-    # availability is the same in both conditions (it has no year): only the demand of b differs, and in `year` the
-    # demand of b, absent there, is a copy of that of a in the reference
+    # availability is the same in both conditions (it has no year): only the demand of b differs,
+    # and in `year` the demand of b, absent there, is a copy of that of a in the reference
     demand_b = full.demand * 1.25
     copy_b = demand_b.where(full.year_op != year, full.demand)
     p = with_conditions(full, [0.5, 0.5], demand=[full.demand, demand_b])
@@ -268,14 +275,17 @@ def test_an_absent_pair_in_one_year_of_the_full_model(full, flags):
     assert (labels.sel({C: "a"}) != -1).all()
 
 
-# --- 4. pseudo-year reference --------------------------------------------------------------------------------------
+# --- 4. pseudo-year reference --------------------------------------------------------------------
 
-WEATHER = [(1.0, 1.0), (1.25, 0.7)]  # (demand factor, availability factor) of the two weather profiles
+# (demand factor, availability factor) of the two weather profiles
+WEATHER = [(1.0, 1.0), (1.25, 0.7)]
 WEIGHTS = [0.6, 0.4]
 
 
 def _one_vintage(p):
-    """Investment in the vintage 2030 only (end of life 2050), no early decommissioning of any module."""
+    """
+    Investment in the vintage 2030 only (end of life 2050), no early decommissioning of any module.
+    """
     p = p.copy(deep=True)
     for name in p.data_vars:
         if name.endswith("_early_decommissioning"):
@@ -299,8 +309,16 @@ def _two_conditions(p):
 
 
 def _two_years(p):
-    """The same profiles as two operation years (2030, 2040) whose discount factors are the weights, no conditions."""
-    years = xr.concat([p, p], dim="year_op", data_vars="minimal", coords="minimal", compat="override")
+    """The same profiles as two operation years (2030, 2040) whose discount factors are the
+    weights, no conditions.
+    """
+    years = xr.concat(
+        [p, p],
+        dim="year_op",
+        data_vars="minimal",
+        coords="minimal",
+        compat="override",
+    )
     years = years.assign_coords(year_op=[2030, 2040])
     years["discount_factor"] = ("year_op", WEIGHTS)
     # not in the objective: any value but 1 shows a leak (it would change the objective)
@@ -315,7 +333,8 @@ def _two_years(p):
 
 
 def test_pseudo_year_reference():
-    # three areas: the planning costs (annuities, fixed costs) and the operation costs of every module are real
+    # three areas: the planning costs (annuities, fixed costs) and the operation costs of every
+    # module are real
     p = _one_vintage(build_nnode_parameters(n_areas=3, n_hours=24))
     m_conditions = _solve(_two_conditions(p))
     m_years = _solve(_two_years(p), guard=False)
@@ -330,7 +349,7 @@ def test_pseudo_year_reference():
         )
 
 
-# --- 5. two-stage decomposition ------------------------------------------------------------------------------------
+# --- 5. two-stage decomposition ------------------------------------------------------------------
 
 
 def _with_tax_group(p, areas, rate):
@@ -346,11 +365,13 @@ def _with_tax_group(p, areas, rate):
 
 def test_two_stage_decomposition():
     """
-    Stochastic objective == sum of weight x objective of each condition alone, the first-stage variables fixed.
+    Stochastic objective == sum of weight x objective of each condition alone, the first-stage
+    variables fixed.
 
-    The variables without the condition (capacities, planning) are fixed to the stochastic optimum in the model of
-    each condition alone (weight 1); what remains is the operation of that condition. Their weighted sum is the
-    objective only if the expectation is taken once, with the right weights, and no row couples two conditions.
+    The variables without the condition (capacities, planning) are fixed to the stochastic optimum
+    in the model of each condition alone (weight 1); what remains is the operation of that
+    condition. Their weighted sum is the objective only if the expectation is taken once, with the
+    right weights, and no row couples two conditions.
     """
     weights = [0.5, 0.3, 0.2]
     nnodes = build_nnode_parameters(n_areas=3, n_hours=24)
@@ -376,7 +397,7 @@ def test_two_stage_decomposition():
     assert m.objective.value == pytest.approx(total, rel=1e-7)
 
 
-# --- 6. retrofit: one decision for all the conditions --------------------------------------------------------------
+# --- 6. retrofit: one decision for all the conditions --------------------------------------------
 
 HYDROGEN = 3.0  # demand in 2030: what "smr" (capped at 3) can supply alone
 SMR_COST = [300.0, 0.0]  # variable cost of "smr" in the conditions a and b
@@ -387,10 +408,11 @@ def _retrofit_market(p, annuity, weights, smr_cost=SMR_COST):
     """
     The retrofit smr -> smr_ccs as the only route to smr_ccs, worth it only where "smr" is dear.
 
-    From the p_retrofit_value slice: a hydrogen demand "smr" covers alone, no direct investment in smr_ccs, no
-    conversion annuity or fixed cost (the retrofit annuity is then the only planning cost) and the variable cost of
-    "smr" per condition. smr_ccs also draws a little electricity, which costs it methane (shed at 1000): it is dearer
-    than "smr" at a variable cost of 0 and cheaper at 300. A gas price cannot favour smr_ccs: both take 1.5 methane.
+    From the p_retrofit_value slice: a hydrogen demand "smr" covers alone, no direct investment in
+    smr_ccs, no conversion annuity or fixed cost (the retrofit annuity is then the only planning
+    cost) and the variable cost of "smr" per condition. smr_ccs also draws a little electricity,
+    which costs it methane (shed at 1000): it is dearer than "smr" at a variable cost of 0 and
+    cheaper at 300. A gas price cannot favour smr_ccs: both take 1.5 methane.
     """
     p = p.copy(deep=True)
     p["demand"].loc[dict(resource="hydrogen", year_op=2030)] = HYDROGEN
@@ -414,11 +436,13 @@ def _retrofit_market(p, annuity, weights, smr_cost=SMR_COST):
 
 
 def _saving(p, smr_cost):
-    """What one unit of smr_ccs capacity saves in a condition where "smr" costs `smr_cost` per MWh, in a year."""
+    """What one unit of smr_ccs capacity saves in a condition where "smr" costs `smr_cost` per
+    MWh, in a year.
+    """
     f, vc = p.conversion_factor, p.conversion_variable_cost
     elec = "electricity"
-    # electricity of one MWh of hydrogen from smr_ccs, made by ocgt from methane (the methane of smr and smr_ccs is
-    # the same: it cancels)
+    # electricity of one MWh of hydrogen from smr_ccs, made by ocgt from methane (the methane of
+    # smr and smr_ccs is the same: it cancels)
     ocgt_per_mwh = float(
         -f.sel(conversion_tech="smr_ccs", resource=elec)
         / f.sel(conversion_tech="ocgt", resource=elec)
@@ -456,11 +480,13 @@ def test_retrofit_decision_is_shared(p_retrofit_value, weights, share):  # noqa:
     annuity = share * saving_a
     market = _retrofit_market(p, annuity, list(weights))
     m = _solve(market)
-    # the retrofit pays when the weighted saving of a unit exceeds its annuity (nothing is saved in b)
+    # the retrofit pays when the weighted saving of a unit exceeds its annuity (nothing is saved in
+    # b)
     weighted = weights[0] * saving_a
     expected = HYDROGEN if weighted > annuity else 0.0
     assert _retrofitted(m) == pytest.approx(expected, abs=1e-6)
-    # objective: the model without the retrofit, less what the retrofitted units save net of their annuity
+    # objective: the model without the retrofit, less what the retrofitted units save net of their
+    # annuity
     off = market.copy(deep=True)
     off["retrofit_conversion"] = xr.DataArray(False)
     m_off = _solve(off)
@@ -484,7 +510,9 @@ def test_retrofit_variables_have_no_condition(p_retrofit_value):  # noqa: F811
 
 
 def _shortfall(p):
-    """The scenario of test_retrofit_conversion.py: 3 units retrofitted and 4 of smr_ccs built directly."""
+    """The scenario of test_retrofit_conversion.py: 3 units retrofitted and 4 of smr_ccs built
+    directly.
+    """
     p = p.copy(deep=True)
     p["demand"].loc[dict(resource="hydrogen", year_op=2030)] = 10.0
     p["conversion_annuity_cost"] = xr.where(

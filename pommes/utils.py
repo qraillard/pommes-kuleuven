@@ -494,6 +494,10 @@ def expected_over_conditions(expr, p: Dataset):
 
     Works on linopy variables/expressions and DataArrays; returns `expr`
     itself when the dataset has no coordinate or `expr` lacks the dimension.
+
+    On a result DataArray (a solution, a summary) nan is skipped by the sum:
+    an absent pair, or a variable masked in one condition, counts as 0, and an
+    entry that is nan in every condition gives 0, not nan.
     """
     if not has_operating_conditions(p) or OPERATING_CONDITION not in expr.dims:
         return expr
@@ -509,13 +513,20 @@ def annual_quantity(expr, p: Dataset, expected_flag: str):
 
 
 def annual_mask(p: Dataset, expected_flag: str, mask):
-    """Mask of a flagged annual constraint: `mask` on the expectation (no condition dimension), else per condition."""
+    """Mask of a flagged annual constraint: `mask` on the expectation, else per condition."""
     if expected_flag in p and bool(p[expected_flag]):
         return mask
     return condition_mask(p, mask)
 
 
 def condition_dual_scale(p: Dataset) -> DataArray:
-    """Weight per (year_op, condition); 1 without the coordinate."""
+    """
+    Weight per (year_op, condition); 1 without the coordinate.
+
+    Divide the raw dual of an operational constraint by it to get its price
+    (the dual of a row is the weight of its condition times the price). A
+    condition of weight 0 has no price: the division gives nan or inf there,
+    whatever the dual. A condition absent in a year (weight nan) has no row.
+    """
     w = operating_condition_weight(p)
     return xr.DataArray(1.0) if w is None else w

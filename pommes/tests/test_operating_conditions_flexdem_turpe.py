@@ -1,7 +1,7 @@
 """Operating conditions in the flexible demand and TURPE modules.
 
-One area, four hours, electricity only: wind is switched off, so the demand is covered by imports and every optimum
-is checkable by hand.
+One area, four hours, electricity only: wind is switched off, so the demand is covered by imports
+and every optimum is checkable by hand.
 """
 import numpy as np
 import pytest
@@ -115,7 +115,9 @@ def test_flexdem_conserves_in_each_condition(p_flex):
         ],
     )
     m = _solve(p)
-    x = m.solution["operation_flexdem_demand"].sel(area="area_1", resource="electricity", year_op=2020)
+    x = m.solution["operation_flexdem_demand"].sel(
+        area="area_1", resource="electricity", year_op=2020
+    )
     a, b = (x.sel(operating_condition=c).values for c in "ab")
     # each window of 2 h takes its whole energy at its cheapest hour, in each condition
     np.testing.assert_allclose(a, [20, 0, 0, 20], atol=1e-6)
@@ -175,7 +177,8 @@ def _demand(p, values):
 
 @pytest.mark.parametrize("order", ["ab", "ba"])
 def test_turpe_contract_covers_the_larger_condition(p_turpe, order):
-    # the larger P withdrawal (10) is in condition 'a' for "ab" and in 'b' for "ba": a contract ignoring one fails
+    # the larger P withdrawal (10) is in condition 'a' for "ab" and in 'b' for "ba": a contract
+    # ignoring one fails
     p = with_conditions(
         p_turpe,
         [0.5, 0.5],
@@ -192,12 +195,14 @@ def test_turpe_contract_covers_the_larger_condition(p_turpe, order):
     # P covers the larger hourly withdrawal of its hours, whichever condition holds it
     sel = contract.sel(area="area_1", year_op=2020)
     assert float(sel.sel(hour_type="P")) == pytest.approx(10.0)
-    # the contract never decreases along the hour types: the cheapest way is 10 at HCE (fixed cost 5), counted once
+    # the contract never decreases along the hour types: the cheapest way is 10 at HCE (fixed cost
+    # 5), counted once
     assert float(fixed.sum()) == pytest.approx(10 * 5)
     # variable cost per condition (0.01 at HCE, 0.5 at P) and in expectation
     expected = {"a": 8 * 0.01 + 20 * 0.5, "b": 16 * 0.01 + 12 * 0.5}
     for k, c in enumerate("ab"):
-        assert float(variable.sel(operating_condition=c).sum()) == pytest.approx(expected[order[k]])
+        total = float(variable.sel(operating_condition=c).sum())
+        assert total == pytest.approx(expected[order[k]])
     assert m.objective.value == pytest.approx(50 + 0.5 * 10.08 + 0.5 * 6.16)
 
 

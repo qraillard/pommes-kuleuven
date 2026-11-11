@@ -597,3 +597,135 @@ with the criticality of the hour: equation :eq:`progressive-turpe`.
 
     \mathbf{CP}^{w}_{y, h} \geq \mathbf{CP}^{w}_{y, h - 1}
     \quad \forall \, y, h
+
+.. _section-operating-conditions:
+
+Operating conditions (weighted weather years)
+=============================================
+
+A dataset may carry an optional coordinate ``operating_condition`` (index :math:`\kappa \in \mathcal{K}`,
+free labels, int or str), for instance weather years, and a weight
+:math:`\varpi_{y, \kappa}` (``operating_condition_weight``): the probability of a condition given its
+operation year. Without the coordinate the model is exactly the model described above: every helper
+returns its input unchanged and no variable or constraint is added.
+
+Weights
+-------
+
+- Without the ``year_op`` dimension a weight applies to every year.
+- The finite weights of a year sum to 1 (tolerance :math:`10^{-9}`), otherwise ``check_inputs`` raises.
+  A weight must be finite or ``nan``, and not negative.
+- ``nan``: the condition does not exist in that year. No variable and no constraint is written for the pair.
+- ``0``: the condition is kept. Its constraints hold and its costs count for nothing. In particular its load
+  shedding costs nothing: with load shedding allowed, a condition of weight 0 imposes no capacity; it imposes
+  capacity only where shedding is not allowed.
+- A dataset with the coordinate must carry the weight when it has several conditions; a single condition
+  without weight gets weight 1.
+- The weight composes with ``operation_year_weight``, whose meaning is unchanged (it scales the cumulative
+  production only and does not enter the objective). The objective weighs a year by its discount factor.
+
+Only the following parameters may carry the coordinate; ``check_inputs`` refuses it on any other parameter
+and names it. Hourly profiles: ``conversion_availability``, ``transport_availability``, ``demand``,
+``flexdem_demand``, ``net_import_import_price``, ``net_import_export_price``, ``net_import_emission_factor``,
+``net_import_total_emission_factor``. Variable costs: ``conversion_variable_cost``,
+``combined_variable_cost``, ``process_variable_cost``, ``transport_hurdle_costs``, ``load_shedding_cost``,
+``spillage_cost``. Annual operational ceilings: ``conversion_max_yearly_production``,
+``net_import_max_yearly_energy_import``, ``net_import_max_yearly_energy_export``. The time grid, the
+capacities and their costs and bounds, the life spans, the technologies and the policy (carbon tax and goals,
+TURPE tariffs) are shared by the conditions.
+
+What takes the dimension
+------------------------
+
+Every operational variable (all the variables indexed by ``hour``) and their annual operational aggregates
+(operational costs and emissions per year) carry the dimension :math:`\kappa`. The planning variables
+(capacities, investments, decommissioning, retrofit), ``annualised_totex`` and the objective never do: the
+capacities are shared by the conditions (one capacity covers the most demanding condition), the dispatch is
+chosen per condition. The size of the operational part of the model is multiplied by the number of conditions;
+the planning part is not.
+
+Costs and objective
+-------------------
+
+Each operational cost is written per condition and enters the annualised totex through its expectation over
+the conditions, :math:`\sum_{\kappa} \varpi_{y, \kappa} \, (\cdot)_{y, \kappa}` (a ``nan`` weight counts as 0).
+Costs shared by the conditions (capital and fixed costs, the TURPE fixed cost) come back exactly once because the
+weights of a year sum to 1. The objective keeps its form (equation :eq:`objective`): investment, fixed costs and
+expected operation, with the discount factor of each year.
+
+Operational constraints
+-----------------------
+
+The following hold in each condition: adequacy, capacity limits of the dispatch, ramps and constant operation,
+transport (the ``transport_delay`` shift runs along ``hour`` inside each condition), flexible demand windows and
+horizon conservation, storage level (the cycle is closed within each condition: no energy moves from one
+condition to another), process unit commitment and minimum times (the integer variables are per condition: the
+MILP grows with the number of conditions), ``conversion_max_capacity_factor`` and
+``conversion_max_daily_production`` (no flag).
+
+TURPE: the contract power is subscribed once per year (it has no condition) and covers the withdrawal of every
+condition; its fixed cost is counted once and its variable cost in expectation. A condition of weight 0 imposes
+contract power only if its dispatch needs it, its dispatch being free otherwise.
+
+Annual constraints
+------------------
+
+One boolean flag per family (default ``False``) chooses the mode of an annual ceiling or goal. With ``False``
+the constraint holds in each condition (one row per existing year and condition, and the ceiling may carry the
+coordinate). With ``True`` the annual quantity goes through the expectation and there is one row per year; a
+ceiling that carries the coordinate is then refused by ``check_inputs``. A condition of weight 0 still has its row
+with ``False`` and counts for 0 in the expectation with ``True``.
+
+.. list-table::
+    :header-rows: 1
+
+    * - Constraint
+      - Flag
+      - Summed quantity
+    * - ``operation_carbon_goal_constraint``, ``operation_carbon_goal_area_constraint``,
+        ``operation_carbon_goal_group_constraint``
+      - ``carbon_goal_expected``, ``carbon_goal_area_expected``, ``carbon_goal_group_expected``
+      - annual emissions times ``operation_year_normalization`` (unchanged)
+    * - ``operation_conversion_yearly_production_max_constraint``
+      - ``conversion_max_yearly_production_expected``
+      - annual production
+    * - ``operation_net_import_import_yearly_max_constraint``,
+        ``operation_net_import_export_yearly_max_constraint``
+      - ``net_import_max_yearly_energy_import_expected``, ``net_import_max_yearly_energy_export_expected``
+      - annual energy
+    * - ``operation_conversion_cumulative_production_max_constraint``
+      - none
+      - sum over the years of the expected annual production
+
+The cumulative production spans several years whose conditions may differ, so "in each condition" has no meaning
+there: it always uses the expectation. The carbon tax of an area and of a tax group is paid on the expected
+emissions. ``combined`` has no annual production ceiling.
+
+Retrofit
+--------
+
+Retrofit has no hourly variable: its decisions change capacities only. They are planning decisions shared by the
+conditions, the retrofitted capacity is available in every condition and its costs are counted once.
+
+Outputs
+-------
+
+- ``model.solution``: the operational variables keep the ``operating_condition`` dimension. ``save_solution`` and
+  ``read_solution`` are unchanged: one more column in the CSV files, one more dimension in the NetCDF files.
+  Selecting one condition needs a list, ``sel(operating_condition=["a"])``.
+- Prices: the raw dual of an operational constraint is the weight of its condition times the price. Divide it by
+  ``condition_dual_scale(p)`` (the weight, 1 without conditions) to get the price. In a condition of weight 0 the
+  weight is 0: there is no price there (the division gives nan or inf).
+- Summaries (``calculate_summaries.py``, ``post_process.py``) never sum over ``operating_condition``: energy,
+  emissions and costs come per condition. Capacities, shared by the conditions, have no condition. The planning
+  costs, which have none, are repeated in each condition, so the cost of a condition is its planning costs plus its
+  operation costs, and the total is the weighted mean ``expected_over_conditions(...)`` (the weights of a year sum
+  to 1), never a sum over the conditions. ``annualised_totex`` is already an expectation.
+- ``expected_over_conditions`` on a result skips nan: an absent pair, or a variable masked in one condition, counts as 0,
+  and an entry that is nan in every condition gives 0, not nan.
+- In a condition of weight 0 the cost variables defined by inequalities (``operation_carbon_costs``,
+  ``operation_carbon_tax_group_costs``) are not tight, since nothing pushes them down: their values there are
+  bounds, not costs.
+
+Out of scope: a rolling horizon with operating conditions (``flexdem_shifted_energy_initial`` cannot carry the
+coordinate), conditions on capacities or policy parameters, and a different set of weights per area.

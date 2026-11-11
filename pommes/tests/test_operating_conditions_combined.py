@@ -1,8 +1,8 @@
 """Operating conditions in the combined module.
 
-One area, four hours, one combined technology (`chp_gas`: mode m2 makes 1 MWh of electricity, spilled, and
-0.6 MWh of heat from 2.2 MWh of methane, bought by shedding), heat demand only: the heat is covered by the
-combined unit or shed at 1000 per MWh, so the optimum is checkable by hand.
+One area, four hours, one combined technology (`chp_gas`: mode m2 makes 1 MWh of electricity,
+spilled, and 0.6 MWh of heat from 2.2 MWh of methane, bought by shedding), heat demand only: the
+heat is covered by the combined unit or shed at 1000 per MWh, so the optimum is checkable by hand.
 """
 import numpy as np
 import pytest

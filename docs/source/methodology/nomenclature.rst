@@ -30,6 +30,10 @@ Indices and Index Sets
       - ``year_dec``
       - Decommissioning years (optional in the study coords: derived from the life spans when absent)
 
+    * - :math:`\kappa \in \mathcal{K}`
+      - ``operating_condition``
+      - Operating conditions, e.g. weather years (optional coordinate: without it the model has no such dimension)
+
     * - :math:`t \in \mathcal{T}`
       - ``hour``
       - Operation snapshots
@@ -76,6 +80,22 @@ General Parameters
     * - :math:`d_{a, r, t, y}`
       - ``demand``
       - Exogenous demand of :math:`r` in area :math:`a` in :math:`y` at :math:`t` [MWh]
+
+    * - :math:`\varpi_{y, \kappa}`
+      - ``operating_condition_weight``
+      - Probability of the operating condition :math:`\kappa` given the operation year :math:`y` [-]. The finite weights of a year sum to 1, ``nan`` means that the condition does not exist in that year (no variable, no constraint), ``0`` keeps the condition at no cost
+
+    * - ``carbon_goal_expected``, ``carbon_goal_area_expected``, ``carbon_goal_group_expected``
+      - the same names
+      - Boolean flags (default ``False``): the carbon goal holds in each operating condition (``False``) or on the expectation over the conditions of the year (``True``)
+
+    * - ``conversion_max_yearly_production_expected``
+      - the same name
+      - Boolean flag (default ``False``): the yearly production ceiling holds in each operating condition (``False``) or on the expectation (``True``)
+
+    * - ``net_import_max_yearly_energy_import_expected``, ``net_import_max_yearly_energy_export_expected``
+      - the same names
+      - Boolean flags (default ``False``): the yearly import (export) ceiling holds in each operating condition (``False``) or on the expectation (``True``)
 
     * - :math:`\lambda^{curt}_{a, r, y}`
       - ``load_shedding_cost``
