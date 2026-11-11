@@ -5,6 +5,14 @@ import xarray as xr
 from linopy import Constraint, Model
 from xarray import Dataset
 
+from pommes.utils import (
+    annual_mask,
+    annual_quantity,
+    condition_coords,
+    condition_mask,
+    expected_over_conditions,
+)
+
 
 def add_carbon(
     model: Model,
@@ -125,12 +133,15 @@ def add_carbon(
     # Operation - Carbon
 
     operation_carbon_emissions = m.add_variables(
-        name="operation_carbon_emissions", coords=[p.area, p.hour, p.year_op]
+        name="operation_carbon_emissions",
+        coords=[p.area, p.hour, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     operation_total_carbon_emissions = m.add_variables(
         name="operation_total_carbon_emissions",
-        coords=[p.area, p.hour, p.year_op],
+        coords=[p.area, p.hour, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     # Costs - Carbon
@@ -139,14 +150,17 @@ def add_carbon(
     # credit with capture, DAC) pays nothing and is not paid for its removals. Lower bound 0 here,
     # an inequality below, the objective makes it tight.
     operation_carbon_costs = m.add_variables(
-        name="operation_carbon_costs", lower=0, coords=[p.area, p.year_op]
+        name="operation_carbon_costs",
+        lower=0,
+        coords=[p.area, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     # ------------------
     # Objective function
     # ------------------
 
-    annualised_totex_def.lhs += operation_carbon_costs
+    annualised_totex_def.lhs += expected_over_conditions(operation_carbon_costs, p)
 
     # --------------
     # Constraints
@@ -159,10 +173,14 @@ def add_carbon(
         # as there is a "duplication"
         # of the variables operation_total_carbon_emissions and
         # operation_carbon_emissions
-        +operation_year_normalization
-        * operation_total_carbon_emissions.sum(["area", "hour"])
+        annual_quantity(
+            +operation_year_normalization
+            * operation_total_carbon_emissions.sum(["area", "hour"]),
+            p,
+            "carbon_goal_expected",
+        )
         <= p.carbon_goal,
-        mask=np.isfinite(p.carbon_goal),
+        mask=annual_mask(p, "carbon_goal_expected", np.isfinite(p.carbon_goal)),
         name="operation_carbon_goal_constraint",
     )
 
@@ -170,9 +188,16 @@ def add_carbon(
     # below) -- carbon_goal_area is the equivalent per-area limit for the
     # system-wide carbon_goal above, only where configured (not NaN).
     m.add_constraints(
-        +operation_year_normalization * operation_total_carbon_emissions.sum("hour")
+        annual_quantity(
+            +operation_year_normalization
+            * operation_total_carbon_emissions.sum("hour"),
+            p,
+            "carbon_goal_area_expected",
+        )
         <= p.carbon_goal_area,
-        mask=np.isfinite(p.carbon_goal_area),
+        mask=annual_mask(
+            p, "carbon_goal_area_expected", np.isfinite(p.carbon_goal_area)
+        ),
         name="operation_carbon_goal_area_constraint",
     )
 
@@ -188,9 +213,17 @@ def add_carbon(
             operation_total_carbon_emissions.sum("hour") * p.carbon_goal_group_areas
         ).sum("area")
         m.add_constraints(
-            +operation_year_normalization * group_total_emissions
+            annual_quantity(
+                +operation_year_normalization * group_total_emissions,
+                p,
+                "carbon_goal_group_expected",
+            )
             <= p.carbon_goal_group_max,
-            mask=np.isfinite(p.carbon_goal_group_max),
+            mask=annual_mask(
+                p,
+                "carbon_goal_group_expected",
+                np.isfinite(p.carbon_goal_group_max),
+            ),
             name="operation_carbon_goal_group_constraint",
         )
 
@@ -199,12 +232,14 @@ def add_carbon(
     operation_carbon_emissions_def = m.add_constraints(
         -operation_carbon_emissions
         == 0,
+        mask=condition_mask(p),
         name="operation_carbon_emissions_def",
     )
 
     operation_total_carbon_emissions_def = m.add_constraints(
         -operation_total_carbon_emissions
         == 0,
+        mask=condition_mask(p),
         name="operation_total_carbon_emissions_def",
     )
 
@@ -269,6 +304,7 @@ def add_carbon(
         * operation_carbon_emissions.sum("hour")
         * carbon_tax_area
         <= 0,
+        mask=condition_mask(p),
         name="operation_carbon_costs_def",
     )
 
@@ -283,14 +319,17 @@ def add_carbon(
         operation_carbon_tax_group_costs = m.add_variables(
             name="operation_carbon_tax_group_costs",
             lower=0,
-            coords=[p.carbon_tax_group, p.year_op],
+            coords=[p.carbon_tax_group, p.year_op, *condition_coords(p)],
+            mask=condition_mask(p),
         )
 
         # Same discounting as the per-area costs, which reach the objective
         # through annualised_totex (per area); a group is not an area.
         m.objective += (
             p.discount_factor
-            * operation_carbon_tax_group_costs.sum("carbon_tax_group")
+            * expected_over_conditions(
+                operation_carbon_tax_group_costs.sum("carbon_tax_group"), p
+            )
         ).sum("year_op")
 
         group_emissions = (
@@ -306,6 +345,7 @@ def add_carbon(
                 y=0,
             )
             <= 0,
+            mask=condition_mask(p),
             name="operation_carbon_tax_group_costs_def",
         )
 
