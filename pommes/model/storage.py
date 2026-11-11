@@ -8,6 +8,11 @@ from linopy import Constraint, Model
 from xarray import Dataset
 
 from pommes.model.annuity import annuity_full_life, full_life_window
+from pommes.utils import (
+    condition_coords,
+    condition_mask,
+    expected_over_conditions,
+)
 
 
 def add_storage(
@@ -154,30 +159,43 @@ def add_storage(
     operation_storage_level = m.add_variables(
         name="operation_storage_level",
         lower=0,
-        coords=[p.area, p.hour, p.storage_tech, p.year_op],
+        coords=[p.area, p.hour, p.storage_tech, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     operation_storage_power_in = m.add_variables(
         name="operation_storage_power_in",
         lower=0,
-        coords=[p.area, p.hour, p.storage_tech, p.year_op],
+        coords=[p.area, p.hour, p.storage_tech, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     operation_storage_power_out = m.add_variables(
         name="operation_storage_power_out",
         lower=0,
-        coords=[p.area, p.hour, p.storage_tech, p.year_op],
+        coords=[p.area, p.hour, p.storage_tech, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     # Operation - Storage intermediate variables
 
     operation_storage_net_generation = m.add_variables(
         name="operation_storage_net_generation",
-        coords=[p.area, p.hour, p.storage_tech, p.resource, p.year_op],
-        mask=np.isfinite(p.storage_factor_in) * (p.storage_factor_in != 0)
-        + np.isfinite(p.storage_factor_out) * (p.storage_factor_out != 0)
-        + np.isfinite(p.storage_factor_keep) * (p.storage_factor_keep != 0)
-        > 0,
+        coords=[
+            p.area,
+            p.hour,
+            p.storage_tech,
+            p.resource,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(
+            p,
+            np.isfinite(p.storage_factor_in) * (p.storage_factor_in != 0)
+            + np.isfinite(p.storage_factor_out) * (p.storage_factor_out != 0)
+            + np.isfinite(p.storage_factor_keep) * (p.storage_factor_keep != 0)
+            > 0,
+        ),
     )
 
     # Planning - Storage
@@ -219,7 +237,8 @@ def add_storage(
     operation_storage_costs = m.add_variables(
         name="operation_storage_costs",
         lower=0,
-        coords=[p.area, p.storage_tech, p.year_op],
+        coords=[p.area, p.storage_tech, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     planning_storage_costs = m.add_variables(
@@ -232,8 +251,8 @@ def add_storage(
     # Objective function
     # ------------------
 
-    annualised_totex_def.lhs += operation_storage_costs.sum(
-        "storage_tech"
+    annualised_totex_def.lhs += expected_over_conditions(
+        operation_storage_costs.sum("storage_tech"), p
     ) + planning_storage_costs.sum("storage_tech")
 
     # --------------
@@ -257,21 +276,25 @@ def add_storage(
         * p.time_step_duration
         == 0,
         name="operation_storage_level_def",
+        mask=condition_mask(p),
     )
 
     m.add_constraints(
         operation_storage_power_in - operation_storage_power_capacity <= 0,
         name="operation_storage_power_in_max_constraint",
+        mask=condition_mask(p),
     )
 
     m.add_constraints(
         operation_storage_power_out - operation_storage_power_capacity <= 0,
         name="operation_storage_power_out_max_constraint",
+        mask=condition_mask(p),
     )
 
     m.add_constraints(
         operation_storage_level - operation_storage_energy_capacity <= 0,
         name="operation_storage_level_max_constraint",
+        mask=condition_mask(p),
     )
 
     m.add_constraints(
@@ -283,7 +306,9 @@ def add_storage(
         / p.time_step_duration
         <= 0,
         name="operation_storage_charge_ramp_constraint",
-        mask=np.isfinite(p.storage_charge_ramp) * (p.hour != p.hour[0]),
+        mask=condition_mask(
+            p, np.isfinite(p.storage_charge_ramp) * (p.hour != p.hour[0])
+        ),
     )
 
     m.add_constraints(
@@ -295,7 +320,9 @@ def add_storage(
         / p.time_step_duration
         <= 0,
         name="operation_storage_discharge_ramp_constraint",
-        mask=np.isfinite(p.storage_discharge_ramp) * (p.hour != p.hour[0]),
+        mask=condition_mask(
+            p, np.isfinite(p.storage_discharge_ramp) * (p.hour != p.hour[0])
+        ),
     )
 
     #TODO: storage_level ramping - do I apply a ramp based on the remaining volume level or on the volume capacity ? Do I allow for both ?
@@ -373,10 +400,13 @@ def add_storage(
         )
         == 0,
         name="operation_storage_net_generation_def",
-        mask=np.isfinite(p.storage_factor_in) * (p.storage_factor_in != 0)
-        + np.isfinite(p.storage_factor_out) * (p.storage_factor_out != 0)
-        + np.isfinite(p.storage_factor_keep) * (p.storage_factor_keep != 0)
-        > 0,
+        mask=condition_mask(
+            p,
+            np.isfinite(p.storage_factor_in) * (p.storage_factor_in != 0)
+            + np.isfinite(p.storage_factor_out) * (p.storage_factor_out != 0)
+            + np.isfinite(p.storage_factor_keep) * (p.storage_factor_keep != 0)
+            > 0,
+        ),
     )
 
     # Planning - Storage
@@ -470,6 +500,7 @@ def add_storage(
         + (p.storage_fixed_cost_energy * operation_storage_energy_capacity)
         == 0,
         name="operation_storage_costs_def",
+        mask=condition_mask(p),
     )
 
     if annuity_full_life(
