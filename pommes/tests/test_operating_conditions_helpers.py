@@ -76,13 +76,32 @@ def test_expectation_reads_nan_as_zero():
 
 
 def test_expectation_of_a_linopy_expression():
-    p = with_conditions(base(), [0.25, 0.75])
+    # unsorted labels and year-dependent weights: each variable must get the
+    # weight of its own (year, condition)
+    w = xr.DataArray(
+        [[0.25, 0.75], [0.6, 0.4]],
+        coords={"year_op": YEARS, "operating_condition": ["z", "b"]},
+    )
+    p = with_conditions(base(), w, labels=["z", "b"])
     m = Model()
     v = m.add_variables(coords=[p.year_op, p.operating_condition], name="v")
-    e = expected_over_conditions(v, p)
-    assert "operating_condition" not in e.dims
-    assert sorted(np.unique(e.coeffs.values)) == [0.25, 0.75]
-    assert expected_over_conditions(v * 2, p).coeffs.max() == 1.5
+    for scale in (1, 2):
+        e = expected_over_conditions(v * scale, p)
+        assert "operating_condition" not in e.dims
+        for year in YEARS:
+            got = {
+                int(var): float(c)
+                for var, c in zip(
+                    e.vars.sel(year_op=year).values.ravel(),
+                    e.coeffs.sel(year_op=year).values.ravel(),
+                )
+            }
+            want = {
+                int(v.labels.sel(year_op=year, operating_condition=c)): scale
+                * float(w.sel(year_op=year, operating_condition=c))
+                for c in ["z", "b"]
+            }
+            assert got == want
 
 
 def test_annual_quantity_follows_the_flag():
