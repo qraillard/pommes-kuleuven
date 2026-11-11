@@ -6,6 +6,11 @@ from linopy import Constraint, Model
 from xarray import Dataset
 
 from pommes.model.annuity import annuity_full_life, full_life_window
+from pommes.utils import (
+    condition_coords,
+    condition_mask,
+    expected_over_conditions,
+)
 
 
 def add_transport(
@@ -189,8 +194,14 @@ def add_transport(
     operation_transport_power = m.add_variables(
         name="operation_transport_power",
         lower=0,
-        coords=[p.link, p.transport_tech, p.hour, p.year_op],
-        mask=pair_exists,
+        coords=[
+            p.link,
+            p.transport_tech,
+            p.hour,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(p, pair_exists),
     )
 
     # Power injected into the link at its transport_area_from end. Equal to
@@ -201,8 +212,14 @@ def add_transport(
     operation_transport_power_in = m.add_variables(
         name="operation_transport_power_in",
         lower=0,
-        coords=[p.link, p.transport_tech, p.hour, p.year_op],
-        mask=pair_exists,
+        coords=[
+            p.link,
+            p.transport_tech,
+            p.hour,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(p, pair_exists),
     )
 
     # Linepack buffer level (only meaningful where transport_linepack_capacity
@@ -210,17 +227,35 @@ def add_transport(
     operation_transport_linepack_level = m.add_variables(
         name="operation_transport_linepack_level",
         lower=0,
-        coords=[p.link, p.transport_tech, p.hour, p.year_op],
-        mask=np.isfinite(p.transport_linepack_capacity) & pair_exists,
+        coords=[
+            p.link,
+            p.transport_tech,
+            p.hour,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(
+            p, np.isfinite(p.transport_linepack_capacity) & pair_exists
+        ),
     )
 
     # Operation - transport intermediate variables
 
     operation_transport_net_generation = m.add_variables(
         name="operation_transport_net_generation",
-        coords=[p.area, p.hour, p.transport_tech, p.resource, p.year_op],
-        mask=np.equal(p.transport_resource, p.resource).any(
-            [dim for dim in ["link"] if dim in p.transport_resource.dims]
+        coords=[
+            p.area,
+            p.hour,
+            p.transport_tech,
+            p.resource,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(
+            p,
+            np.equal(p.transport_resource, p.resource).any(
+                [dim for dim in ["link"] if dim in p.transport_resource.dims]
+            ),
         ),
     )
 
@@ -249,7 +284,8 @@ def add_transport(
         name="operation_transport_costs",
         # no lower bound: hurdle costs may be negative (a subsidy on a link),
         # as the operating costs of conversion and net imports
-        coords=[p.area, p.transport_tech, p.year_op],
+        coords=[p.area, p.transport_tech, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     planning_transport_costs = m.add_variables(
@@ -265,9 +301,9 @@ def add_transport(
     # Hurdle costs (EUR per MWh carried) are counted in operation_transport_costs below, weighted like the
     # variable costs of the other modules (time step, year normalisation, and discounting through
     # annualised_totex), so that they do not depend on the number of modelled hours or years.
-    annualised_totex_def.lhs += (
-        operation_transport_costs + planning_transport_costs
-    ).sum(["transport_tech"])
+    annualised_totex_def.lhs += expected_over_conditions(
+        operation_transport_costs.sum("transport_tech"), p
+    ) + planning_transport_costs.sum("transport_tech")
 
     # --------------
     # Constraints
@@ -319,7 +355,7 @@ def add_transport(
         )
         <= 0,
         name="operation_transport_power_max_constraint",
-        mask=pair_exists,
+        mask=condition_mask(p, pair_exists),
     )
 
     # Operation - transport linepack
@@ -333,7 +369,7 @@ def add_transport(
         - operation_transport_power
         == 0,
         name="operation_transport_power_in_def",
-        mask=no_linepack & (delay_steps == 0) & pair_exists,
+        mask=condition_mask(p, no_linepack & (delay_steps == 0) & pair_exists),
     )
 
     # With a delay of k time steps, what is withdrawn at hour h was injected
@@ -344,7 +380,7 @@ def add_transport(
             - operation_transport_power
             == 0,
             name=f"operation_transport_power_in_def_delay_{int(k)}",
-            mask=no_linepack & (delay_steps == k) & pair_exists,
+            mask=condition_mask(p, no_linepack & (delay_steps == k) & pair_exists),
         )
 
     # Where configured, the pipe's own gas/volume buffer absorbs the
@@ -358,13 +394,17 @@ def add_transport(
         * p.time_step_duration
         == 0,
         name="operation_transport_linepack_level_def",
-        mask=np.isfinite(p.transport_linepack_capacity) & pair_exists,
+        mask=condition_mask(
+            p, np.isfinite(p.transport_linepack_capacity) & pair_exists
+        ),
     )
 
     m.add_constraints(
         operation_transport_linepack_level <= p.transport_linepack_capacity,
         name="operation_transport_linepack_level_max_constraint",
-        mask=np.isfinite(p.transport_linepack_capacity) & pair_exists,
+        mask=condition_mask(
+            p, np.isfinite(p.transport_linepack_capacity) & pair_exists
+        ),
     )
 
     m.add_constraints(
@@ -377,7 +417,9 @@ def add_transport(
         )
         <= 0,
         name="operation_transport_power_in_max_constraint",
-        mask=np.isfinite(p.transport_linepack_capacity) & pair_exists,
+        mask=condition_mask(
+            p, np.isfinite(p.transport_linepack_capacity) & pair_exists
+        ),
     )
 
     # Operation - Transport unit commitment
@@ -391,9 +433,12 @@ def add_transport(
         / p.time_step_duration
         <= 0,
         name="operation_transport_ramp_up_constraint",
-        mask=np.isfinite(p.transport_ramp_up)
-        * (p.hour != p.hour[0])
-        * pair_exists,
+        mask=condition_mask(
+            p,
+            np.isfinite(p.transport_ramp_up)
+            * (p.hour != p.hour[0])
+            * pair_exists,
+        ),
     )
 
     m.add_constraints(
@@ -405,9 +450,12 @@ def add_transport(
         / p.time_step_duration
         <= 0,
         name="operation_transport_ramp_down_constraint",
-        mask=np.isfinite(p.transport_ramp_down)
-        * (p.hour != p.hour[0])
-        * pair_exists,
+        mask=condition_mask(
+            p,
+            np.isfinite(p.transport_ramp_down)
+            * (p.hour != p.hour[0])
+            * pair_exists,
+        ),
     )
 
     # Operation - transport intermediate variables
@@ -448,8 +496,11 @@ def add_transport(
         )
         == 0,
         name="operation_transport_net_generation_def",
-        mask=np.equal(p.transport_resource, p.resource).any(
-            [dim for dim in ["link"] if dim in p.transport_resource.dims]
+        mask=condition_mask(
+            p,
+            np.equal(p.transport_resource, p.resource).any(
+                [dim for dim in ["link"] if dim in p.transport_resource.dims]
+            ),
         ),
     )
 
@@ -532,6 +583,7 @@ def add_transport(
         )
         == 0,
         name="operation_transport_costs_def",
+        mask=condition_mask(p),
     )
 
     if annuity_full_life(p, "transport_annuity_cost"):
