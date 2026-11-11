@@ -121,9 +121,27 @@ def check_operating_condition_weight(ds: Dataset) -> None:
                 )
             return
         weight = weight.expand_dims(operating_condition=ds.operating_condition)
+    where = lambda bad: bad.to_series()[bad.to_series()].index.tolist()  # noqa: E731
+    infinite = np.isinf(weight)
+    if bool(infinite.any()):
+        raise ValueError(
+            "operating_condition_weight must be finite, or nan for a "
+            f"condition absent from a year; infinite at {where(infinite)}."
+        )
+    negative = weight < 0
+    if bool(negative.any()):
+        raise ValueError(
+            "operating_condition_weight is a probability and must be >= 0; "
+            f"negative at {where(negative)}."
+        )
+    empty = weight.isnull().all("operating_condition")
+    if bool(empty.any()):
+        raise ValueError(
+            "operating_condition_weight: a year has no operating condition "
+            f"at all (every weight is nan), year {where(empty)}."
+        )
     total = weight.sum("operating_condition", skipna=True)
-    # Tolerance 1e-8: a total of 1 + 2e-9 is accepted (the spec text says 1e-9).
-    if not bool((abs(total - 1) <= 1e-8).all()):
+    if not bool((abs(total - 1) <= 1e-9).all()):
         raise ValueError(
             f"operating_condition_weight: the finite weights of each year "
             f"must sum to 1, got {total.values.tolist()}."

@@ -1692,26 +1692,26 @@ operating_condition_weight:
   - year_op
   type: float64
 carbon_goal_expected:
-  default: false
+  default: 0
   index_set: []
   type: bool
 carbon_goal_area_expected:
-  default: false
+  default: 0
   index_set: []
   type: bool
 carbon_goal_group_expected:
-  default: false
+  default: 0
   index_set: []
   type: bool
 conversion_max_yearly_production_expected:
-  default: false
+  default: 0
   index_set: []
   type: bool
 net_import_max_yearly_energy_import_expected:
-  default: false
+  default: 0
   index_set: []
   type: bool
 net_import_max_yearly_energy_export_expected:
-  default: false
+  default: 0
   index_set: []
   type: bool
