@@ -38,3 +38,14 @@ def with_conditions(
         ]
         p = p.assign({name: xr.concat(parts, dim=index)})
     return p
+
+
+def assert_condition_dims_consistent(m):
+    """Every constraint's terms carry no dimension its rows lack (a missed expectation at an ``lhs +=``)."""
+    bad = [
+        n
+        for n in m.constraints
+        if not set(m.constraints[n].vars.dims) - {"_term"}
+        <= set(m.constraints[n].labels.dims)
+    ]
+    assert not bad, f"terms with dims the constraint lacks: {bad}"

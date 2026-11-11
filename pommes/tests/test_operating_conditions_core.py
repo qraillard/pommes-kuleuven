@@ -7,7 +7,10 @@ import numpy as np
 import pytest
 
 from pommes.model.build_model import build_model
-from pommes.tests.conditions_helper import with_conditions
+from pommes.tests.conditions_helper import (
+    assert_condition_dims_consistent,
+    with_conditions,
+)
 from pommes.tests.dataset_nnodes import build_nnode_parameters
 from pommes.tests.test_flexdem import _with_defaults
 
@@ -23,6 +26,8 @@ def _base():
 
 def _solve(ds):
     m = build_model(ds)
+    if "operating_condition" in ds.coords:
+        assert_condition_dims_consistent(m)
     status, _ = m.solve(solver_name="highs")
     assert status == "ok"
     return m

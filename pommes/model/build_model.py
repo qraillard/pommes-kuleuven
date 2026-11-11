@@ -4,8 +4,6 @@ import numpy as np
 from linopy import Model
 from xarray import Dataset
 
-from pommes.utils import condition_coords, condition_mask, expected_over_conditions
-
 from pommes.model import (
     add_carbon,
     add_combined,
@@ -20,6 +18,11 @@ from pommes.model import (
     add_turpe,
     add_process,
     add_flexdem
+)
+from pommes.utils import (
+    condition_coords,
+    condition_mask,
+    expected_over_conditions,
 )
 
 

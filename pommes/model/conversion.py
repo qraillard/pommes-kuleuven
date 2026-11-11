@@ -6,6 +6,12 @@ from linopy import Constraint, Model
 from xarray import Dataset
 
 from pommes.model.annuity import annuity_full_life, full_life_window
+from pommes.utils import (
+    annual_quantity,
+    condition_coords,
+    condition_mask,
+    expected_over_conditions,
+)
 
 
 def add_conversion(
@@ -195,15 +201,25 @@ def add_conversion(
     operation_conversion_power = m.add_variables(
         name="operation_conversion_power",
         lower=0,
-        coords=[p.area, p.conversion_tech, p.hour, p.year_op],
+        coords=[p.area, p.conversion_tech, p.hour, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     # Operation - Conversion intermediate variables
 
     operation_conversion_net_generation = m.add_variables(
         name="operation_conversion_net_generation",
-        coords=[p.area, p.conversion_tech, p.hour, p.resource, p.year_op],
-        mask=np.isfinite(p.conversion_factor) * (p.conversion_factor != 0),
+        coords=[
+            p.area,
+            p.conversion_tech,
+            p.hour,
+            p.resource,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(
+            p, np.isfinite(p.conversion_factor) * (p.conversion_factor != 0)
+        ),
     )
 
     # Planning - Conversion
@@ -228,7 +244,8 @@ def add_conversion(
 
     operation_conversion_costs = m.add_variables(
         name="operation_conversion_costs",
-        coords=[p.area, p.conversion_tech, p.year_op],
+        coords=[p.area, p.conversion_tech, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     planning_conversion_costs = m.add_variables(
@@ -240,8 +257,8 @@ def add_conversion(
     # Objective function
     # ------------------
 
-    annualised_totex_def.lhs += operation_conversion_costs.sum(
-        "conversion_tech"
+    annualised_totex_def.lhs += expected_over_conditions(
+        operation_conversion_costs.sum("conversion_tech"), p
     ) + planning_conversion_costs.sum("conversion_tech")
 
     # --------------
@@ -266,9 +283,12 @@ def add_conversion(
         )
         <= 0,
         name="operation_conversion_power_max_constraint",
-        mask=np.logical_or(
-            np.isnan(p.conversion_must_run),
-            p.conversion_must_run < 1,
+        mask=condition_mask(
+            p,
+            np.logical_or(
+                np.isnan(p.conversion_must_run),
+                p.conversion_must_run < 1,
+            ),
         ),
     )
 
@@ -277,7 +297,7 @@ def add_conversion(
         - operation_conversion_power_capacity * p.conversion_availability
         == 0,
         name="operation_conversion_must_run_constraint_equality",
-        mask=p.conversion_must_run == 1,
+        mask=condition_mask(p, p.conversion_must_run == 1),
     )
 
     m.add_constraints(
@@ -291,7 +311,9 @@ def add_conversion(
         * p.conversion_must_run
         >= 0,
         name="operation_conversion_must_run_constraint_inequality",
-        mask=(0 < p.conversion_must_run) * (p.conversion_must_run < 1),
+        mask=condition_mask(
+            p, (0 < p.conversion_must_run) * (p.conversion_must_run < 1)
+        ),
     )
 
     # Operation - Conversion unit commitment
@@ -309,7 +331,7 @@ def add_conversion(
             - operation_conversion_power.shift(hour=1)
             == 0,
             name="operation_conversion_constant_operation_constraint",
-            mask=constant_operation * (p.hour != p.hour[0]),
+            mask=condition_mask(p, constant_operation * (p.hour != p.hour[0])),
         )
 
     m.add_constraints(
@@ -321,9 +343,12 @@ def add_conversion(
         / p.time_step_duration
         <= 0,
         name="operation_conversion_ramp_up_constraint",
-        mask=np.isfinite(p.conversion_ramp_up)
-        * ~constant_operation
-        * (p.hour != p.hour[0]),
+        mask=condition_mask(
+            p,
+            np.isfinite(p.conversion_ramp_up)
+            * ~constant_operation
+            * (p.hour != p.hour[0]),
+        ),
     )
 
     # TODO : implement ramp based on available capacity, not all capacity
@@ -336,9 +361,12 @@ def add_conversion(
         / p.time_step_duration
         <= 0,
         name="operation_conversion_ramp_down_constraint",
-        mask=np.isfinite(p.conversion_ramp_down)
-        * ~constant_operation
-        * (p.hour != p.hour[0]),
+        mask=condition_mask(
+            p,
+            np.isfinite(p.conversion_ramp_down)
+            * ~constant_operation
+            * (p.hour != p.hour[0]),
+        ),
     )
 
     # TODO: Ramp constraints fo lag > 1 not implemented yet and for storage
@@ -347,11 +375,21 @@ def add_conversion(
     # Operation - Conversion other constraints
 
     m.add_constraints(
-        +operation_year_normalization
-        * (p.time_step_duration * operation_conversion_power).sum(["hour"])
+        annual_quantity(
+            +operation_year_normalization
+            * (p.time_step_duration * operation_conversion_power).sum(["hour"]),
+            p,
+            "conversion_max_yearly_production_expected",
+        )
         <= p.conversion_max_yearly_production,
         name="operation_conversion_yearly_production_max_constraint",
-        mask=np.isfinite(p.conversion_max_yearly_production),
+        # the constraint carries the dimension unless it is on the expectation
+        mask=(
+            np.isfinite(p.conversion_max_yearly_production)
+            if "conversion_max_yearly_production_expected" in p
+            and bool(p.conversion_max_yearly_production_expected)
+            else condition_mask(p, np.isfinite(p.conversion_max_yearly_production))
+        ),
     )
 
     # The year's output at most conversion_max_capacity_factor times the
@@ -366,7 +404,7 @@ def add_conversion(
         * p.operation_year_duration
         * operation_conversion_power_capacity,
         name="operation_conversion_capacity_factor_max_constraint",
-        mask=np.isfinite(p.conversion_max_capacity_factor),
+        mask=condition_mask(p, np.isfinite(p.conversion_max_capacity_factor)),
     )
 
     # Production summed over the operation years of the run, each standing for
@@ -386,7 +424,12 @@ def add_conversion(
             (
                 operation_year_normalization
                 * p.operation_year_weight
-                * (p.time_step_duration * operation_conversion_power).sum(["hour"])
+                * expected_over_conditions(
+                    (p.time_step_duration * operation_conversion_power).sum(
+                        ["hour"]
+                    ),
+                    p,
+                )
             ).sum("year_op")
             <= p.conversion_max_cumulative_production,
             name="operation_conversion_cumulative_production_max_constraint",
@@ -417,7 +460,7 @@ def add_conversion(
             * (p.time_step_duration * operation_conversion_power).groupby(day).sum()
             <= p.conversion_max_daily_production,
             name="operation_conversion_daily_production_max_constraint",
-            mask=np.isfinite(p.conversion_max_daily_production),
+            mask=condition_mask(p, np.isfinite(p.conversion_max_daily_production)),
         )
 
 
@@ -438,7 +481,9 @@ def add_conversion(
         * (p.conversion_factor * operation_conversion_power)
         == 0,
         name="operation_conversion_net_generation_def",
-        mask=np.isfinite(p.conversion_factor) * (p.conversion_factor != 0),
+        mask=condition_mask(
+            p, np.isfinite(p.conversion_factor) * (p.conversion_factor != 0)
+        ),
     )
 
     # Planning - Conversion
@@ -488,6 +533,7 @@ def add_conversion(
         + (p.conversion_fixed_cost * operation_conversion_power_capacity)
         == 0,
         name="operation_conversion_costs_def",
+        mask=condition_mask(p),
     )
 
     if annuity_full_life(p, "conversion_annuity_cost"):
