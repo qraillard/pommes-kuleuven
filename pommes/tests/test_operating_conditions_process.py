@@ -60,8 +60,19 @@ def _solved(p):
     return _solve(m)
 
 
-def _cost(parameters_dispatch_invest, process, hourly):
+def _priced(p, carbon):
+    """Carbon on: process emissions of 0.7 t per MWh of power, taxed at 30, no goal."""
+    p = xr.merge([p, carbon])
+    p["carbon_goal"] = 1e9
+    p["carbon_tax"] = 30.0
+    p["process_emission_factor"] = xr.zeros_like(p["process_emission_factor"]) + 0.7
+    return p
+
+
+def _cost(parameters_dispatch_invest, process, hourly, carbon=None):
     p = _base(parameters_dispatch_invest, process)
+    if carbon is not None:
+        p = _priced(p, carbon)
     p["demand"] = _demand(p, hourly)
     return _solved(p).objective.value
 
@@ -93,6 +104,21 @@ def test_process_cost_is_the_weighted_mean(parameters_dispatch_invest, process):
     cost_a = _cost(parameters_dispatch_invest, process, a)
     cost_b = _cost(parameters_dispatch_invest, process, b)
     assert cost_a != cost_b
+    assert m.objective.value == pytest.approx(
+        0.6 * cost_a + 0.4 * cost_b, rel=1e-9
+    )
+
+
+def test_process_emissions_are_taxed_per_condition(
+    parameters_dispatch_invest, process, carbon
+):
+    # the process power carries the condition into carbon's emission definitions
+    a, b = [0.0, 0.0, 1.0, 1.0, 0.0, 1.0], [1.0, 1.0, 1.0, 0.0, 0.0, 0.0]
+    p = _priced(_base(parameters_dispatch_invest, process), carbon)
+    m = _solved(_with_demands(p, [0.6, 0.4], a, b))
+    cost_a = _cost(parameters_dispatch_invest, process, a, carbon)
+    cost_b = _cost(parameters_dispatch_invest, process, b, carbon)
+    assert cost_a != _cost(parameters_dispatch_invest, process, a)  # emissions are priced
     assert m.objective.value == pytest.approx(
         0.6 * cost_a + 0.4 * cost_b, rel=1e-9
     )
