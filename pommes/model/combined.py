@@ -8,6 +8,11 @@ from linopy import Constraint, Model
 from xarray import Dataset
 
 from pommes.model.annuity import annuity_full_life, full_life_window
+from pommes.utils import (
+    condition_coords,
+    condition_mask,
+    expected_over_conditions,
+)
 
 
 def add_combined(
@@ -210,16 +215,34 @@ def add_combined(
     operation_combined_power = m.add_variables(
         name="operation_combined_power",
         lower=0,
-        coords=[p.area, p.combined_tech, p.mode, p.hour, p.year_op],
+        coords=[
+            p.area,
+            p.combined_tech,
+            p.mode,
+            p.hour,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(p),
     )
 
     # Operation - Combined intermediate variables
 
     operation_combined_net_generation = m.add_variables(
         name="operation_combined_net_generation",
-        coords=[p.area, p.combined_tech, p.hour, p.resource, p.year_op],
-        mask=(np.isfinite(p.combined_factor) * (p.combined_factor != 0)).any(
-            [dim for dim in ["mode"] if dim in p.combined_factor.dims]
+        coords=[
+            p.area,
+            p.combined_tech,
+            p.hour,
+            p.resource,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(
+            p,
+            (np.isfinite(p.combined_factor) * (p.combined_factor != 0)).any(
+                [dim for dim in ["mode"] if dim in p.combined_factor.dims]
+            ),
         ),
     )
 
@@ -245,7 +268,8 @@ def add_combined(
 
     operation_combined_costs = m.add_variables(
         name="operation_combined_costs",
-        coords=[p.area, p.combined_tech, p.year_op],
+        coords=[p.area, p.combined_tech, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p),
     )
 
     planning_combined_costs = m.add_variables(
@@ -257,8 +281,8 @@ def add_combined(
     # Objective function
     # ------------------
 
-    annualised_totex_def.lhs += operation_combined_costs.sum(
-        "combined_tech"
+    annualised_totex_def.lhs += expected_over_conditions(
+        operation_combined_costs.sum("combined_tech"), p
     ) + planning_combined_costs.sum("combined_tech")
 
     # --------------
@@ -278,6 +302,7 @@ def add_combined(
         - operation_combined_power_capacity * p.combined_max_load
         <= 0,
         name="operation_combined_power_max_constraint",
+        mask=condition_mask(p),
     )
 
     m.add_constraints(
@@ -285,6 +310,7 @@ def add_combined(
         - operation_combined_power_capacity * p.combined_min_load
         >= 0,
         name="operation_combined_power_min_constraint",
+        mask=condition_mask(p),
     )
 
     m.add_constraints(
@@ -292,7 +318,7 @@ def add_combined(
         # if combined_factor is not defined for a given mode, then the
         # technology cannot operate under this mode
         name="operation_combined_power_undefined_mode",
-        mask=(p.combined_factor == 0).all(dim="resource"),
+        mask=condition_mask(p, (p.combined_factor == 0).all(dim="resource")),
     )
 
     # TODO: must run in combined
@@ -348,7 +374,9 @@ def add_combined(
             - operation_combined_power.sum("mode").shift(hour=1)
             == 0,
             name="operation_combined_constant_operation_constraint",
-            mask=aggregate_constant * ~mode_constant * (p.hour != p.hour[0]),
+            mask=condition_mask(
+                p, aggregate_constant * ~mode_constant * (p.hour != p.hour[0])
+            ),
         )
 
     if mode_constant.any():
@@ -356,7 +384,7 @@ def add_combined(
             operation_combined_power - operation_combined_power.shift(hour=1)
             == 0,
             name="operation_combined_mode_constant_operation_constraint",
-            mask=mode_constant * (p.hour != p.hour[0]),
+            mask=condition_mask(p, mode_constant * (p.hour != p.hour[0])),
         )
 
     m.add_constraints(
@@ -368,9 +396,12 @@ def add_combined(
         - combined_ramp_up * operation_combined_power_capacity
         <= 0,
         name="operation_combined_ramp_up_constraint",
-        mask=np.isfinite(combined_ramp_up)
-        * ~aggregate_constant
-        * (p.hour != p.hour[0]),
+        mask=condition_mask(
+            p,
+            np.isfinite(combined_ramp_up)
+            * ~aggregate_constant
+            * (p.hour != p.hour[0]),
+        ),
     )
 
     m.add_constraints(
@@ -382,9 +413,12 @@ def add_combined(
         - combined_ramp_down * operation_combined_power_capacity
         <= 0,
         name="operation_combined_ramp_down_constraint",
-        mask=np.isfinite(combined_ramp_down)
-        * ~aggregate_constant
-        * (p.hour != p.hour[0]),
+        mask=condition_mask(
+            p,
+            np.isfinite(combined_ramp_down)
+            * ~aggregate_constant
+            * (p.hour != p.hour[0]),
+        ),
     )
 
     # Optional, opt-in: limits how fast the split between modes shifts,
@@ -406,9 +440,12 @@ def add_combined(
             - combined_mode_ramp_up * operation_combined_power_capacity
             <= 0,
             name=f"operation_combined_mode_ramp_up_constraint_{mode_a}_{mode_b}",
-            mask=np.isfinite(combined_mode_ramp_up)
-            * ~mode_constant
-            * (p.hour != p.hour[0]),
+            mask=condition_mask(
+                p,
+                np.isfinite(combined_mode_ramp_up)
+                * ~mode_constant
+                * (p.hour != p.hour[0]),
+            ),
         )
 
         m.add_constraints(
@@ -420,9 +457,12 @@ def add_combined(
             - combined_mode_ramp_down * operation_combined_power_capacity
             <= 0,
             name=f"operation_combined_mode_ramp_down_constraint_{mode_a}_{mode_b}",
-            mask=np.isfinite(combined_mode_ramp_down)
-            * ~mode_constant
-            * (p.hour != p.hour[0]),
+            mask=condition_mask(
+                p,
+                np.isfinite(combined_mode_ramp_down)
+                * ~mode_constant
+                * (p.hour != p.hour[0]),
+            ),
         )
 
     # TODO: Ramp constraints for lag > 1 not implemented yet and for storage
@@ -459,8 +499,11 @@ def add_combined(
         * (p.combined_factor * operation_combined_power).sum(["mode"])
         == 0,
         name="operation_combined_net_generation_def",
-        mask=(np.isfinite(p.combined_factor) * (p.combined_factor != 0)).any(
-            [dim for dim in ["mode"] if dim in p.combined_factor.dims]
+        mask=condition_mask(
+            p,
+            (np.isfinite(p.combined_factor) * (p.combined_factor != 0)).any(
+                [dim for dim in ["mode"] if dim in p.combined_factor.dims]
+            ),
         ),
     )
 
@@ -511,6 +554,7 @@ def add_combined(
         + p.combined_fixed_cost * operation_combined_power_capacity
         == 0,
         name="operation_combined_costs_def",
+        mask=condition_mask(p),
     )
 
     if annuity_full_life(p, "combined_annuity_cost"):
