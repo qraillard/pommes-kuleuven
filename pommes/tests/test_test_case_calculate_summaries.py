@@ -9,6 +9,14 @@ from pommes.io.calculate_summaries import (
 )
 from pommes.model.build_model import build_model
 
+try:  # the sparse solution stores some variables over "<tech>_unit" dims
+    from pommes.model.sparsity import densify_any
+except ImportError:  # dense pommes-milp: nothing to unstack
+
+    def densify_any(data):
+        return data
+
+
 TYPES = ["power_capacity", "net_generation", "costs", "emissions"]
 
 
@@ -73,7 +81,7 @@ def _tech_of_type(parameters, type_value, resource_for_net_import):
 
 
 def _solution_sum(solved, variable, **labels):
-    data = solved[variable]
+    data = densify_any(solved[variable])
     other = [d for d in data.dims if d not in labels and d != "link"]
     return float(data.sum(other).sel(**labels))
 
