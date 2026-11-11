@@ -4,6 +4,8 @@ import numpy as np
 from linopy import Model
 from xarray import Dataset
 
+from pommes.utils import condition_coords, condition_mask, expected_over_conditions
+
 from pommes.model import (
     add_carbon,
     add_combined,
@@ -109,33 +111,41 @@ def build_model(model_parameters: Dataset) -> Model:
     operation_load_shedding_power = m.add_variables(
         name="operation_load_shedding_power",
         lower=0,
-        mask=np.logical_or(
-            np.isnan(p.load_shedding_max_capacity),
-            p.load_shedding_max_capacity > 0,
+        mask=condition_mask(
+            p,
+            np.logical_or(
+                np.isnan(p.load_shedding_max_capacity),
+                p.load_shedding_max_capacity > 0,
+            ),
         ),
-        coords=[p.area, p.hour, p.resource, p.year_op],
+        coords=[p.area, p.hour, p.resource, p.year_op, *condition_coords(p)],
     )
 
     operation_spillage_power = m.add_variables(
         name="operation_spillage_power",
         lower=0,
-        mask=np.logical_or(
-            np.isnan(p.spillage_max_capacity),
-            p.spillage_max_capacity > 0,
+        mask=condition_mask(
+            p,
+            np.logical_or(
+                np.isnan(p.spillage_max_capacity),
+                p.spillage_max_capacity > 0,
+            ),
         ),
-        coords=[p.area, p.hour, p.resource, p.year_op],
+        coords=[p.area, p.hour, p.resource, p.year_op, *condition_coords(p)],
     )
 
     # Costs - load_shedding & spillage
 
     operation_load_shedding_costs = m.add_variables(
         name="operation_load_shedding_costs",
-        coords=[p.area, p.year_op],
+        mask=condition_mask(p),
+        coords=[p.area, p.year_op, *condition_coords(p)],
     )
 
     operation_spillage_costs = m.add_variables(
         name="operation_spillage_costs",
-        coords=[p.area, p.year_op],
+        mask=condition_mask(p),
+        coords=[p.area, p.year_op, *condition_coords(p)],
     )
 
     # Annualised costs
@@ -163,6 +173,7 @@ def build_model(model_parameters: Dataset) -> Model:
         * (operation_load_shedding_power - operation_spillage_power)
         - p.demand
         == 0,
+        mask=condition_mask(p),
         name="operation_adequacy_constraint",
     )
 
@@ -170,15 +181,21 @@ def build_model(model_parameters: Dataset) -> Model:
 
     m.add_constraints(
         operation_load_shedding_power <= p.load_shedding_max_capacity,
-        mask=np.isfinite(p.load_shedding_max_capacity)
-        * (p.load_shedding_max_capacity > 0),
+        mask=condition_mask(
+            p,
+            np.isfinite(p.load_shedding_max_capacity)
+            * (p.load_shedding_max_capacity > 0),
+        ),
         name="operation_load_shedding_max_constraint",
     )
 
     m.add_constraints(
         operation_spillage_power <= p.spillage_max_capacity,
-        mask=np.isfinite(p.spillage_max_capacity)
-        * (p.spillage_max_capacity > 0),
+        mask=condition_mask(
+            p,
+            np.isfinite(p.spillage_max_capacity)
+            * (p.spillage_max_capacity > 0),
+        ),
         name="operation_spillage_max_constraint",
     )
 
@@ -193,6 +210,7 @@ def build_model(model_parameters: Dataset) -> Model:
         ).sum(["hour", "resource"])
         * operation_year_normalization
         == 0,
+        mask=condition_mask(p),
         name="operation_load_shedding_costs_def",
     )
 
@@ -203,14 +221,15 @@ def build_model(model_parameters: Dataset) -> Model:
         ).sum(["hour", "resource"])
         * operation_year_normalization
         == 0,
+        mask=condition_mask(p),
         name="operation_spillage_costs_def",
     )
     # Annualised costs
 
     annualised_totex_def = m.add_constraints(
         -annualised_totex
-        + operation_load_shedding_costs
-        + operation_spillage_costs
+        + expected_over_conditions(operation_load_shedding_costs, p)
+        + expected_over_conditions(operation_spillage_costs, p)
         == 0,
         name="annualised_totex_def",
     )
