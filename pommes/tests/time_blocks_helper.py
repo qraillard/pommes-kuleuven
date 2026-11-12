@@ -1206,7 +1206,8 @@ def _whole_base() -> xr.Dataset:
     fixture alone imports nothing and emits nothing: here heat may be imported at a price that is low for two steps in
     four and high otherwise (``HEAT_IMPORT_PRICE_PER_STEP``: a flat block boiler cannot follow it; no yearly maximum),
     with an emission factor taxed by the fixture's carbon tax (the carbon goal is NaN: a binding goal would tie the two
-    areas). The electric boiler covers the rest of the heat. Every other price keeps the fixture's value, which does not depend on the hour.
+    areas). The electric boiler covers the rest of the heat. Every other price keeps the fixture's value, which does not
+    depend on the hour.
     """
     p = _fixture("parameters").sel(year_dec=[2040], year_inv=[2020], year_op=[2020])
     p = priced_spillage(with_idle(p))
@@ -1382,12 +1383,18 @@ def retrofit_combined_block_dataset() -> xr.Dataset:
     return with_blocks(p, combined={"boiler_block": 2})
 
 
+# the retrofit pair of each module: (builder, source, target)
+RETROFIT = {
+    "conversion": (retrofit_conversion_block_dataset, "old", "new"),
+    "combined": (retrofit_combined_block_dataset, "electric_boiler", "boiler_block"),
+}
+
+
 def retrofit_source_block_dataset(module: str) -> xr.Dataset:
-    """The retrofit dataset of ``module`` ("conversion" or "combined") with the block on the source, the target hourly."""
-    builder, source = {
-        "conversion": (retrofit_conversion_block_dataset, "old"),
-        "combined": (retrofit_combined_block_dataset, "electric_boiler"),
-    }[module]
+    """
+    The retrofit dataset of ``module`` ("conversion" or "combined") with the block on the source, the target hourly.
+    """
+    builder, source, _ = RETROFIT[module]
     return with_blocks(builder(), **{module: {source: 2}})
 
 
@@ -1415,8 +1422,7 @@ def conditions_block_dataset() -> xr.Dataset:
 
     ``power`` is a second, hourly resource (see below). The furnace (on blocks of 2 h) is capped at 1 MW and steel may
     be shed at 7 per MWh: blocks that ask for more than 2 MWh (steps (3, 3) and (1.5, 1.5)) pay the shedding cost at the
-    margin, the others (steps (0.5, 0.7) and (0.2, 0.4)) the
-    furnace's variable cost, so the coarse prices are 7n, vn, 7n, vn (n = operation_year_normalization).
+    margin, the others (steps (0.5, 0.7) and (0.2, 0.4)) the furnace's variable cost, so the coarse prices are 7n, vn, 7n, vn (n = operation_year_normalization).
     """
     p = hand_toy([1.0] * 8, [3.0, 3.0, 0.5, 0.7, 1.5, 1.5, 0.2, 0.4])
     p["conversion_power_capacity_max"] = (("area", "conversion_tech"), [[1.0]])

@@ -14,6 +14,7 @@ from pommes.model.build_model import build_model
 from pommes.tests.conditions_helper import assert_condition_dims_consistent, with_conditions
 from pommes.tests.time_blocks_helper import (
     BLOCK_PARAMETERS,
+    RETROFIT,
     assert_same,
     assert_twin_equal,
     binds,
@@ -22,8 +23,6 @@ from pommes.tests.time_blocks_helper import (
     flat_twin,
     net_import_expected_conditions_dataset,
     net_import_twin_dataset,
-    retrofit_combined_block_dataset,
-    retrofit_conversion_block_dataset,
     retrofit_source_block_dataset,
     solve_model,
     solved,
@@ -35,7 +34,6 @@ from pommes.tests.time_blocks_helper import (
     whole_t1_dataset,
     whole_t2_dataset,
     whole_t3b_dataset,
-    with_blocks,
     with_idle,
 )
 from pommes.utils import block_dim, condition_dual_scale, time_blocks
@@ -67,12 +65,6 @@ def _lengths(p) -> dict:
 def _conditioned(p):
     return with_conditions(p, [0.25, 0.75])
 
-
-# the retrofit pair of each module: (builder, source, target)
-RETROFIT = {
-    "conversion": (retrofit_conversion_block_dataset, "old", "new"),
-    "combined": (retrofit_combined_block_dataset, "electric_boiler", "boiler_block"),
-}
 
 # every block model of this file, by name: a builder each (built once, solved once when a test reads a value)
 BUILDERS = {
