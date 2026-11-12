@@ -3,6 +3,7 @@
 import datetime
 import logging
 import os
+import re
 import warnings
 from dataclasses import dataclass
 
@@ -999,6 +1000,68 @@ def block_mean(x: DataArray, tb: TimeBlocks, L: int) -> DataArray:
     return total / tb.duration[L]
 
 
+def conversion_block_availability(
+    p: Dataset, tb: TimeBlocks, L: int, techs: list[str]
+) -> DataArray:
+    """
+    Block availability of the conversion ``techs`` of length ``L`` (section 6.1).
+
+    ``Ã`` (NaN read as 1, before any aggregation) then, per technology, its
+    rule: ``min`` over each block or the Δ-weighted mean (``block_mean``).
+    Computed on the input grid with a 1-D group, on ``[(area,)
+    conversion_tech(techs), time_block_{L}h, year_op, *cond]``. Without
+    ``hour`` the availability is constant in time and comes back as ``Ã``
+    itself; an absent parameter reads as 1. Call it on the full ``p``.
+    """
+    if "conversion_availability" not in p:
+        return xr.DataArray(1.0)
+    a = p["conversion_availability"]
+    if "conversion_tech" in a.dims:
+        a = a.sel(conversion_tech=techs)
+    a = xr.where(np.isfinite(a), a, 1.0)
+    if "hour" not in a.dims:
+        return a
+    group = tb.block_of_hour[L]
+    _check_group(group, None)
+    _check_axis(a, "hour", group.indexes["hour"])
+    rule = conversion_block_rule(p).sel(conversion_tech=techs)
+    kinds = set(rule.values.tolist())
+    smallest = a.groupby(group).min() if "min" in kinds else None
+    mean = block_mean(a, tb, L) if "mean" in kinds else None
+    if len(kinds) == 1:
+        return smallest if smallest is not None else mean
+    return xr.where(rule == "mean", mean, smallest)
+
+
+def day_of_blocks(tb: TimeBlocks, L: int, d: int) -> DataArray:
+    """
+    Day of each block of ``L`` hours when it lies inside a day (section 8.5).
+
+    ``floor(start / d)`` of the block's first step, named ``day``, 1-D over
+    ``time_block_{L}h`` in block order (a groupby array, C4).
+    """
+    start = tb.start[L]
+    return (start // d).astype("int64").rename("day")
+
+
+def longest_day_in_blocks(tb: TimeBlocks, L: int, d: int) -> DataArray:
+    """
+    Duration of the longest day inside each block of ``L`` hours (section 8.5).
+
+    A day is the steps whose start lies in it, as in the hourly daily cap. Each
+    block holds whole days; the last day of the horizon may be shorter.
+    """
+    step = tb.step.values.astype(float)
+    day = np.floor((np.cumsum(step) - step) / d).astype("int64")
+    per_day = pd.Series(step).groupby(
+        [tb.block_of_hour[L].values, day]
+    ).sum()
+    longest = per_day.groupby(level=0).max()
+    dim = block_dim(L)
+    assert longest.index.equals(tb.duration[L].indexes[dim])
+    return xr.DataArray(longest.values, dims=dim, coords={dim: longest.index.values})
+
+
 def _check_group(group: DataArray, T_L: str | None) -> None:
     """H3: a groupby array is 1-D over ``hour`` or the block dimension."""
     assert group.ndim == 1 and group.dims in {("hour",), (T_L,)}, (
@@ -1122,7 +1185,8 @@ def check_block_dims(m) -> None:
     Raises ``RuntimeError`` naming the object when a constraint's ``vars``
     dims are not within its labels' dims plus ``_term``, or when a variable
     or a constraint (labels or vars) carries ``hour`` together with a
-    ``time_block_*`` dimension, or two different ``time_block_*`` dimensions.
+    ``time_block_*`` dimension, or two different ``time_block_*`` dimensions,
+    or when an object named ``..._block_{L}h_...`` carries ``hour``.
     Reads dimension names only.
     """
     for kind, items in (("variable", m.variables), ("constraint", m.constraints)):
@@ -1143,6 +1207,13 @@ def check_block_dims(m) -> None:
                     raise RuntimeError(
                         f"{kind} {name}: dimensions {sorted(d)} mix "
                         f"resolutions (H5)."
+                    )
+                if "hour" in d and re.search(r"_block_\d+h_", name):
+                    # a block row built with a per-step parameter keeps the hour
+                    # dimension of that parameter (and no block one)
+                    raise RuntimeError(
+                        f"{kind} {name}: a block object carries the hour "
+                        f"dimension (H5)."
                     )
 
 

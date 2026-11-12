@@ -197,6 +197,16 @@ def hand_toy_b(**kw) -> xr.Dataset:
     return with_blocks(hand_toy_a(**kw), resource={"steel": 2})
 
 
+def hand_toy_c(**kw) -> xr.Dataset:
+    """``hand_toy_a`` with the furnace on 2 h blocks, steel derived at 2 h (section 16.1, case C)."""
+    return with_blocks(hand_toy_a(**kw), conversion={"furnace": 2})
+
+
+def hand_toy_d(**kw) -> xr.Dataset:
+    """``hand_toy_c`` with the steel balance forced to the step (section 16.1, case D)."""
+    return with_blocks(hand_toy_a(**kw), conversion={"furnace": 2}, resource={"steel": 1})
+
+
 def priced_spillage(p: xr.Dataset) -> xr.Dataset:
     """``p`` with a cost on every spillage and distinct variable costs: a unique optimum."""
     n, k = p.sizes["resource"], p.sizes["conversion_tech"]
@@ -515,3 +525,187 @@ def combined_unitless_dataset() -> xr.Dataset:
     return p.assign(
         combined_power_capacity_max=p.combined_power_capacity_max.where(p.combined_tech != "boiler_block", 0.0)
     )
+
+
+KILNS = ["kiln_a", "kiln_b", "kiln_c", "kiln_d"]
+STEP_10H = [1.0, 1.0, 2.0, 1.0, 1.0, 2.0, 1.0, 1.0]  # 10 h: with L = 4 the last block is short
+
+
+def conversion_toy(dt: list[float], rate: list[float] | None = None) -> xr.Dataset:
+    """
+    Hourly conversion toy (two areas, one year, no carbon, no flexdem, no net import).
+
+    Resources ``idle``, ``gas`` and ``steel``. Technologies: ``well`` (gas) and
+    ``backup`` (expensive steel, the hourly contributor that keeps steel
+    hourly), then four kilns (steel from gas): ``kiln_a``, ``kiln_b``,
+    ``kiln_c``, ``kiln_d``, whose availability, must-run, ramps and caps the
+    builders below set. Every availability is NaN, every must-run NaN, every ramp
+    NaN. Steel demand is ``rate`` (cycled) times the step. Costs are distinct
+    and strictly positive and every spillage is priced, so that the optimum is
+    unique. Capacity maxima pin ``kiln_c`` in area ``a`` (no unit there in the
+    sparse engine) and bound ``kiln_a`` and ``kiln_b`` in one area each, so that the
+    unit index is not rectangular.
+    """
+    from pommes.model.data_validation import ref_inputs
+
+    dt = np.array(dt, dtype="float64")
+    n = len(dt)
+    rate = np.resize(np.array(HEAT_RATE if rate is None else rate), n)
+    techs = ["well", "backup", *KILNS]
+    k = len(techs)
+    ds = xr.Dataset(
+        coords=dict(
+            area=["a", "b"],
+            hour=np.arange(n, dtype="int64"),
+            resource=["idle", "gas", "steel"],
+            conversion_tech=techs,
+            year_dec=np.array([2040]),
+            year_inv=np.array([2020]),
+            year_op=np.array([2030], dtype="int64"),
+        )
+    )
+    ds["conversion"] = True
+    ds["time_step_duration"] = ("hour", dt)
+    ds["operation_year_duration"] = ("year_op", [8760.0])
+    ds["operation_day_duration"] = np.array(24, dtype="int64")
+    ds["discount_rate"] = ("year_op", [0.0])
+    ds["discount_factor"] = ("year_op", [1.0])
+    demand = np.zeros((2, n, 3, 1))
+    demand[0, :, 2, 0] = rate * dt
+    demand[1, :, 2, 0] = 0.8 * rate * dt
+    ds["demand"] = (("area", "hour", "resource", "year_op"), demand)
+    ds["load_shedding_max_capacity"] = ("resource", [0.0, 0.0, 0.0])
+    ds["load_shedding_cost"] = ("resource", [0.0, 0.0, 0.0])
+    ds["spillage_max_capacity"] = ("resource", [np.nan, np.nan, np.nan])
+    ds["spillage_cost"] = ("resource", [1.0, 2.0, 3.0])
+    # (gas, steel) per MWh of power: the kilns burn gas, the backup burns nothing
+    factor = np.zeros((k, 3))
+    factor[0, 1] = 1.0
+    factor[1, 2] = 1.0
+    for i, burn in enumerate([1.25, 1.5, 1.4, 1.6]):
+        factor[2 + i, 1:] = [-burn, 1.0]
+    ds["conversion_factor"] = (("conversion_tech", "resource"), factor)
+    ds["conversion_variable_cost"] = (
+        "conversion_tech",
+        [0.5, 40.0, 2.1, 0.9, 1.3, 1.7],
+    )
+    ds["conversion_fixed_cost"] = (
+        "conversion_tech",
+        [0.7, 1.1, 3.1, 3.7, 4.3, 2.9],
+    )
+    ds["conversion_invest_cost"] = ("conversion_tech", np.zeros(k))
+    ds["conversion_emission_factor"] = ("conversion_tech", np.zeros(k))
+    cap_max = np.full((2, k), np.nan)
+    cap_max[0, 2 + 2] = 0.0  # kiln_c pinned in area a
+    cap_max[1, 2 + 0] = 2.0  # kiln_a bounded in area b
+    cap_max[0, 2 + 1] = 3.0  # kiln_b bounded in area a
+    ds["conversion_power_capacity_max"] = (("area", "conversion_tech"), cap_max)
+    ds["conversion_power_capacity_min"] = (("area", "conversion_tech"), np.zeros((2, k)))
+    ds["conversion_life_span"] = ("conversion_tech", np.full(k, 20.0))
+    ds["conversion_end_of_life"] = (
+        ("conversion_tech", "year_inv"),
+        np.full((k, 1), 2040.0),
+    )
+    ds["conversion_annuity_cost"] = (
+        ("conversion_tech", "year_dec", "year_inv"),
+        np.zeros((k, 1, 1)),
+    )
+    ds["conversion_early_decommissioning"] = np.array(False)
+    ds["annuity_full_life"] = np.array(False)
+    for name, spec in ref_inputs.items():
+        if name not in ds.variables:
+            ds[name] = np.array(spec["default"], dtype=spec["type"])
+    return ds
+
+
+def per_tech(p: xr.Dataset, name: str, values: dict, dim="hour"):
+    """``p`` with ``name`` on ``[conversion_tech, hour]`` (NaN elsewhere) from ``{tech: per-hour values}``."""
+    da = xr.DataArray(
+        np.full((p.sizes["conversion_tech"], p.sizes[dim]), np.nan),
+        dims=("conversion_tech", dim),
+        coords={"conversion_tech": p.conversion_tech.values, dim: p[dim].values},
+    )
+    for tech, v in values.items():
+        da.loc[{"conversion_tech": tech}] = v
+    return p.assign({name: da})
+
+
+def with_values(p: xr.Dataset, name: str, values: dict) -> xr.Dataset:
+    """``p`` with ``name`` on ``[conversion_tech]`` (NaN elsewhere) from ``{tech: value}``."""
+    da = xr.DataArray(
+        np.full(p.sizes["conversion_tech"], np.nan),
+        dims="conversion_tech",
+        coords={"conversion_tech": p.conversion_tech.values},
+    )
+    for tech, v in values.items():
+        da.loc[{"conversion_tech": tech}] = v
+    return p.assign({name: da})
+
+
+def conversion_t1_dataset() -> xr.Dataset:
+    """
+    ``conversion_toy`` with steps of 3 h and every conversion length 3 (T1: block equals step).
+
+    ``kiln_b`` is must-run 1 on a finite availability. Every tech is on blocks, so
+    the gas and steel balances are derived at 3 h (one block per step); the idle
+    resource stays hourly.
+    """
+    p = conversion_toy([3.0] * 6)
+    p = per_tech(p, "conversion_availability", {"kiln_a": [1, 0.6, 0.9, 0.8, 0.5, 1], "kiln_b": [0.9, 0.7, 0.8, 0.9, 0.7, 0.8]})
+    p = with_values(p, "conversion_must_run", {"kiln_b": 1.0, "kiln_c": 0.5})
+    return with_blocks(p, conversion={t: 3 for t in p.conversion_tech.values})
+
+
+def _t2_base(dt: list[float]) -> xr.Dataset:
+    """Kilns with availability varying inside the blocks, must-run on constant-per-block ones, ramps, caps."""
+    p = conversion_toy(dt)
+    n = len(dt)
+    inside = [1, 0.6, 0.9, 0.8, 0.5, 1, 0.7, 0.9][:n]  # kiln_a: varies inside the blocks of 4 h
+    const = [0.9, 0.9, 0.9, 0.7, 0.7, 0.7, 0.8, 0.8][:n]  # kiln_b, kiln_c: constant per block
+    p = per_tech(p, "conversion_availability", {"kiln_a": inside, "kiln_b": const, "kiln_c": const})
+    p = with_values(p, "conversion_must_run", {"kiln_b": 1.0, "kiln_c": 0.5})
+    p = with_values(p, "conversion_ramp_up", {"kiln_a": 0.8, "kiln_d": 0.0})
+    p = with_values(p, "conversion_ramp_down", {"kiln_a": 0.8, "kiln_d": 0.0})
+    p = with_values(p, "conversion_max_yearly_production", {"kiln_a": 3000.0})
+    p = with_values(p, "conversion_max_capacity_factor", {"kiln_d": 0.5})
+    return p
+
+
+def conversion_t2_dataset() -> xr.Dataset:
+    """
+    ``conversion_toy`` on 10 h (steps 1, 1, 2, ...), the four kilns on blocks of 4 h (short last block).
+
+    Availability varies inside the blocks of ``kiln_a`` (rule min); ``kiln_b``
+    (must-run 1) and ``kiln_c`` (must-run 0.5) have an availability constant inside
+    each block; ramps of 0.8 on ``kiln_a``, none (constant operation) on ``kiln_d``;
+    a yearly maximum on ``kiln_a`` and a capacity-factor maximum on ``kiln_d``.
+    """
+    return with_blocks(_t2_base(STEP_10H), conversion={t: 4 for t in KILNS})
+
+
+def conversion_t2b_dataset() -> xr.Dataset:
+    """``conversion_t2_dataset`` with the mean rule on ``kiln_a`` (the availability that varies)."""
+    return with_blocks(
+        _t2_base(STEP_10H), conversion={t: 4 for t in KILNS}, rule={"kiln_a": "mean"}
+    )
+
+
+def must_run_relaxation_dataset() -> xr.Dataset:
+    """
+    A must-run 1 furnace on an availability that varies inside its 2 h blocks (D9').
+
+    Steel demand is flat, ``furnace`` is cheap and must-run 1 with availability
+    (1, 0.5) in each block, ``backup`` is dear and hourly. The flat twin pins the
+    furnace capacity to 0 (two different availabilities inside a block with a flat
+    power); the block row ``P = cap * min`` is feasible and profitable.
+    """
+    p = hand_toy([1.0] * 4, [2.0] * 4)
+    p = p.isel(conversion_tech=[0, 0]).assign_coords(conversion_tech=["furnace", "backup"])
+    p["conversion_variable_cost"] = ("conversion_tech", [1.0, 30.0])
+    p["conversion_fixed_cost"] = ("conversion_tech", [2.0, 2.0])
+    p["conversion_factor"] = (("conversion_tech", "resource"), [[0.0, 1.0], [0.0, 1.0]])
+    p["conversion_power_capacity_max"] = (("area", "conversion_tech"), [[np.nan, np.nan]])
+    p["conversion_power_capacity_min"] = (("area", "conversion_tech"), [[0.0, 0.0]])
+    p["conversion_must_run"] = ("conversion_tech", [1.0, np.nan])
+    p = per_tech(p, "conversion_availability", {"furnace": [1.0, 0.5, 1.0, 0.5]})
+    return with_blocks(p, conversion={"furnace": 2})

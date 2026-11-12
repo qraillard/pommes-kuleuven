@@ -9,12 +9,15 @@ from pommes.utils import time_blocks
 from pommes.tests.dataset_nnodes import build_nnode_parameters
 from pommes.tests.test_flexdem import _with_defaults, _with_flexdem
 from pommes.tests.time_blocks_helper import (
+    BLOCK_PARAMETERS,
     assert_t0,
     combined_toy,
+    conversion_t2_dataset,
     hand_toy,
     lp_text,
     process_hourly,
     with_blocks,
+    with_values,
 )
 
 
@@ -83,4 +86,13 @@ def test_t0_combined_with_block_tech_and_nan_lengths():
     """C11: a second combined tech, finite ramps and a constant-operation tech, every length NaN."""
     p = combined_toy([1.0] * 10)
     assert p.combined_tech.size == 3 and float(p.combined_ramp_up.min()) == 0.0
+    assert_t0(p)
+
+
+def test_t0_conversion_with_every_row():
+    """C11: availability, must-run 1 and 0.5, ramps, constant operation, yearly, factor, daily and cumulative caps; every length NaN."""
+    p = conversion_t2_dataset().drop_vars(BLOCK_PARAMETERS)
+    p = with_values(p, "conversion_max_daily_production", {"kiln_b": 1e6})
+    p = with_values(p, "conversion_max_cumulative_production", {"kiln_c": 1e9})
+    p = p.assign(operation_year_weight=("year_op", [10.0]))
     assert_t0(p)
