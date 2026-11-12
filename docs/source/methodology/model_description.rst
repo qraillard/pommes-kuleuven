@@ -746,7 +746,9 @@ equality forcing the power to be constant inside each block.
         length, the horizon is a multiple of :math:`L`, there is no conversion or combined ramp (mode-pair ramps
         included) and no daily production maximum (the block ramp divides by the duration of the block's first step and
         the daily row counts days), and, under rule ``mean``, the reference's availability is set to the
-        duration-weighted mean per step
+        duration-weighted mean per step; with net import, the reference's two prices and two emission factors are set
+        to the duration-weighted mean per step too, and carbon is then equal on yearly totals only (the block model's
+        emission rows stay hourly)
     * - Load shedding and spillage on a coarse resource
       - exact
     * - Flexible demand on a coarse balance
