@@ -42,8 +42,9 @@ def conversion_groups(
     6.1, computed on the full ``p``) and no ``conversion_availability``.
     Without a block length on a conversion technology (T0 included) there is
     one group: ``(None, p, None)``, ``p`` itself. ``keep`` (the
-    ``conversion_*`` names a reader needs) only matters in the sparse engine,
-    where it is applied before the gather.
+    ``conversion_*`` names a reader needs): a block group computes
+    ``conversion_block_availability`` only when ``keep`` is None or lists it;
+    in the sparse engine ``keep`` is also applied before the gather.
     """
     lengths = tb.tech_length["conversion"].values
     if not (tb.active and np.isfinite(lengths).any()):
@@ -61,11 +62,12 @@ def conversion_groups(
             p_g = p.drop_vars("conversion_availability", errors="ignore").sel(
                 conversion_tech=list(part)
             )
-            p_g = p_g.assign(
-                conversion_block_availability=conversion_block_availability(
-                    p, tb, L, list(part)
+            if keep is None or "conversion_block_availability" in keep:
+                p_g = p_g.assign(
+                    conversion_block_availability=conversion_block_availability(
+                        p, tb, L, list(part)
+                    )
                 )
-            )
         out.append((L, p_g, None))
     return out
 

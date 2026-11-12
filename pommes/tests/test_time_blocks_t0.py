@@ -148,3 +148,15 @@ def test_t0_flexdem_with_nan_lengths():
     m = build_model(p)
     assert "operation_flexdem_demand_conservation_24h" in m.constraints
     assert all("_block_" not in n for n in [*m.variables, *m.constraints])
+
+
+def test_t0_carbon_with_nan_lengths(parameters):
+    """C11: carbon on with an emission factor on a conversion and a combined tech, the four parameters present and all NaN."""
+    assert bool(parameters.carbon) and float(parameters.conversion_emission_factor.max()) > 0
+    assert float(parameters.combined_emission_factor.max()) > 0
+    p = with_blocks(parameters)
+    assert all(name in p for name in BLOCK_PARAMETERS)
+    assert_t0(p)
+    m = build_model(p)
+    assert "operation_carbon_emissions_def" in m.constraints
+    assert all("_block_" not in n for n in [*m.variables, *m.constraints])

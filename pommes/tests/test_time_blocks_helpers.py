@@ -293,7 +293,6 @@ def test_build_model_raises_time_blocks_refusals(parameters):
 
 
 def test_build_model_warns_once_and_check_inputs_stays_silent(parameters):
-    # carbon off: with a block technology it is refused until Task 9
     p = with_blocks(parameters.assign(carbon=np.array(False)), conversion={"ocgt": 4})
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -455,18 +454,16 @@ def test_a_constant_on_a_dead_slice_is_kept():
     assert coarse.rhs.values.ravel().tolist() == [-6.0, -6.0]  # 3 per hour, 2 hours per block
 
 
-def test_carbon_with_a_block_technology_is_refused(parameters):
-    """M3: until the carbon rows read the block groups, carbon on is refused."""
-    for lengths in ({"combined": {"electric_boiler": 2}}, {"conversion": {"ocgt": 2}}):
-        with pytest.raises(ValueError, match="carbon"):
-            build_model(with_blocks(parameters, **lengths))
-
-
-def test_carbon_with_a_coarse_net_import_resource_is_refused():
-    """Carbon reads only the hourly net_import variable: a coarse balance would drop its emissions."""
-    p = net_import_pairs().assign(carbon=np.array(True))
-    with pytest.raises(ValueError, match="carbon"):
-        build_model(p)
+def test_carbon_with_a_block_technology_or_a_coarse_resource_builds(parameters):
+    """Task 9: the carbon rows read the block groups and the coarse imports (the Task 5 and 8 refusals are gone)."""
+    cases = [
+        with_blocks(parameters, combined={"electric_boiler": 2}),
+        with_blocks(parameters, conversion={"ocgt": 2}),
+        net_import_pairs().assign(carbon=np.array(True)),
+    ]
+    for p in cases:
+        m = build_model(p)
+        assert "operation_carbon_emissions_def" in m.constraints
 
 
 def test_the_time_map_guards_survive_python_O():

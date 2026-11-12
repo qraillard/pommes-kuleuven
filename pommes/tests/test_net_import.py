@@ -8,7 +8,6 @@ from numpy.testing import assert_array_equal as assert_equal
 from pommes.model.build_model import build_model
 from pommes.model.net_import import net_import_groups
 from pommes.tests.time_blocks_helper import (
-    BLOCK_PARAMETERS,
     assert_t0,
     combined_toy,
     coarse_step_dataset,
@@ -145,11 +144,6 @@ STEPS = [1.0, 3.0]  # a 4 h block of two steps
 
 def _objective(p):
     return solve_model(build_model(p)).objective.value
-
-
-def _twin(p):
-    """The hourly model of ``p``: the same dataset without block inputs."""
-    return p.drop_vars(BLOCK_PARAMETERS, errors="ignore")
 
 
 def test_t0_net_import_has_no_trace_of_blocks(parameter_net_import_single_horizon):

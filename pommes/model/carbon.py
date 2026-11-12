@@ -5,14 +5,35 @@ import xarray as xr
 from linopy import Constraint, Model
 from xarray import Dataset
 
+from pommes.model.combined import combined_groups
+from pommes.model.conversion import conversion_groups
+from pommes.model.net_import import net_import_groups
 from pommes.utils import (
     TimeBlocks,
     annual_mask,
     annual_quantity,
+    block_prefix,
+    change_resolution,
     condition_coords,
     condition_mask,
     expected_over_conditions,
+    time_blocks,
 )
+
+
+def _add_emissions(defs, expr, tb, L, hourly_scale=None):
+    """
+    Add ``expr`` (tCO2 per step of a group on resolution ``L``) to the emission rows ``defs``.
+
+    The hourly group (``L`` None) adds today's ``expr * hourly_scale`` with ``+=``;
+    a block group adds the block energy broadcast to the hours by
+    ``change_resolution``, joined to the rows by label (``join="left"``).
+    """
+    for con in defs:
+        if L is None:
+            con.lhs += expr if hourly_scale is None else expr * hourly_scale
+        else:
+            con.lhs = con.lhs.add(change_resolution(expr, tb, L, None), join="left")
 
 
 def add_carbon(
@@ -42,7 +63,8 @@ def add_carbon(
         tb (pommes.utils.TimeBlocks, optional):
             Block lengths and maps of the dataset, computed once by
             ``build_model`` (``time_blocks(model_parameters)`` when None).
-            Accepted for the other modules' signature; not read yet.
+            The emissions of block technology groups and of coarse
+            net_import balances are broadcast to the hours.
 
     Returns:
         linopy.Model:
@@ -131,6 +153,7 @@ def add_carbon(
     m = model
     p = model_parameters
     v = m.variables
+    tb = time_blocks(p) if tb is None else tb
 
     # ------------
     # Variables
@@ -249,21 +272,22 @@ def add_carbon(
         name="operation_total_carbon_emissions_def",
     )
 
-    if "conversion" in p.keys() and p.conversion:
-        operation_carbon_emissions_def.lhs += (
-            v.operation_conversion_power * p.conversion_emission_factor
-        ).sum(["conversion_tech"]) * p.time_step_duration
-        operation_total_carbon_emissions_def.lhs += (
-            v.operation_conversion_power * p.conversion_emission_factor
-        ).sum(["conversion_tech"]) * p.time_step_duration
+    both = [operation_carbon_emissions_def, operation_total_carbon_emissions_def]
 
-    if "combined" in p.keys() and p.combined:
-        operation_carbon_emissions_def.lhs += (
-            v.operation_combined_power * p.combined_emission_factor
-        ).sum(["combined_tech", "mode"]) * p.time_step_duration
-        operation_total_carbon_emissions_def.lhs += (
-            v.operation_combined_power * p.combined_emission_factor
-        ).sum(["combined_tech", "mode"]) * p.time_step_duration
+    # Technology groups: the hourly one as today, a block group as tCO2 per
+    # block (power x factor x block duration) broadcast to its hours
+    for module, groups_of, tech_dims in (
+        ("conversion", conversion_groups, ["conversion_tech"]),
+        ("combined", combined_groups, ["combined_tech", "mode"]),
+    ):
+        if module not in p.keys() or not p[module]:
+            continue
+        for L, p_g, _ in groups_of(p, tb, keep=[f"{module}_emission_factor"]):
+            power = v[f"{block_prefix(module, L)}power"]
+            emissions = (power * p_g[f"{module}_emission_factor"]).sum(tech_dims)
+            if L is not None:
+                emissions = emissions * tb.duration[L]
+            _add_emissions(both, emissions, tb, L, p.time_step_duration)
 
     if "process" in p.keys() and p.process:
         operation_carbon_emissions_def.lhs += (
@@ -275,13 +299,22 @@ def add_carbon(
 
     if "net_import" in p.keys() and p.net_import:
         # Imports are energies per time step (they enter the adequacy balance as they are), so
-        # unlike the power-based terms above they are not multiplied by time_step_duration.
-        operation_carbon_emissions_def.lhs += (
-            v.operation_net_import_import * p.net_import_emission_factor
-        ).sum(["resource"])
-        operation_total_carbon_emissions_def.lhs += (
-            v.operation_net_import_import * p.net_import_total_emission_factor
-        ).sum(["resource"])
+        # unlike the power-based terms above they are not multiplied by time_step_duration,
+        # and a coarse balance's block imports (energies per block) are broadcast as they are.
+        for L, p_g in net_import_groups(p, tb):
+            imports = v[f"{block_prefix('net_import', L)}import"]
+            _add_emissions(
+                [operation_carbon_emissions_def],
+                (imports * p_g.net_import_emission_factor).sum(["resource"]),
+                tb,
+                L,
+            )
+            _add_emissions(
+                [operation_total_carbon_emissions_def],
+                (imports * p_g.net_import_total_emission_factor).sum(["resource"]),
+                tb,
+                L,
+            )
 
     # Costs - Carbon
 

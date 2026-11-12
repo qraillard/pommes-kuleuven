@@ -487,6 +487,27 @@ def pinned_module_dataset(module: str) -> xr.Dataset:
     )
 
 
+def with_carbon(p: xr.Dataset, conversion=None, combined=None, tax=None, goal=None) -> xr.Dataset:
+    """
+    ``p`` with carbon on and an emission factor on the given technologies.
+
+    ``conversion`` and ``combined`` map a technology to its factor (``combined``: a number or one value per mode),
+    every other factor keeps its value; ``tax`` and ``goal`` (per tCO2, tCO2 over the horizon's year) are scalars
+    left NaN when None.
+    """
+    out = {"carbon": np.array(True)}
+    for module, values in (("conversion", conversion), ("combined", combined)):
+        name = f"{module}_emission_factor"
+        ef = p[name].copy()
+        for tech, value in (values or {}).items():
+            ef.loc[{f"{module}_tech": tech}] = value
+        out[name] = ef
+    for name, value in (("carbon_tax", tax), ("carbon_goal", goal)):
+        if value is not None:
+            out[name] = np.array(value, dtype="float64")
+    return p.assign(out)
+
+
 def solve_model(m):
     """Solve ``m`` with HiGHS and assert it is optimal; returns ``m``."""
     assert m.solve(solver_name="highs")[:2] == ("ok", "optimal")
@@ -901,11 +922,10 @@ def coarse_step_dataset(L: int, horizon: int, net_import: bool = False, carbon: 
     block ``HEAT_IMPORT_PRICE``, below the heater's cost) and on ``gas`` (export, prices ``GAS_EXPORT_PRICE``, above
     the well's), prices and emission factors constant inside each block and different between blocks, with a
     binding yearly import maximum on heat and a binding yearly export maximum on gas (area ``a``); gas imports at 50
-    and heat exports at 0, ``idle`` imports at 1. ``carbon`` (Task 9) is not built yet.
+    and heat exports at 0, ``idle`` imports at 1. ``carbon`` puts a tax of ``CARBON_TAX`` and an emission factor on
+    every conversion and combined technology (``COARSE_CARBON``) next to the net_import factors.
     ``coarse_step_reference(p, L)`` is the same system in today's code.
     """
-    if carbon:
-        raise NotImplementedError("carbon is built in Task 9")
     if horizon % L:
         raise ValueError(f"horizon {horizon} is not a multiple of L = {L}")
     p = combined_toy([1.0] * horizon)
@@ -933,6 +953,8 @@ def coarse_step_dataset(L: int, horizon: int, net_import: bool = False, carbon: 
     p = per_tech(p, "conversion_availability", {"heater": np.resize([1.0, 0.6, 0.9, 0.8, 0.5, 1.0, 0.7, 0.9], horizon)})
     if net_import:
         p = _with_net_import(p, L, horizon)
+    if carbon:
+        p = with_carbon(p, tax=CARBON_TAX, **COARSE_CARBON)
     for name in _NO_RAMPS:
         p[name] = xr.full_like(p[name], np.nan) if name in p else xr.DataArray(np.nan)
     techs = {t: L for t in p.conversion_tech.values}
@@ -945,6 +967,12 @@ def coarse_step_dataset(L: int, horizon: int, net_import: bool = False, carbon: 
     check_coarse_step_contract(p)
     return p
 
+
+CARBON_TAX = 12.0  # per tCO2, binding on ``coarse_step_dataset(..., carbon=True)`` (probed)
+COARSE_CARBON = dict(
+    conversion={"well": 0.3, "heater": 0.8},
+    combined={"electric_boiler": [0.1, 0.1], "boiler_block": [0.5, 0.2], "steady_kiln": [0.3, 0.3]},
+)
 
 HEAT_IMPORT_PRICE = [0.2, 0.7, 0.4, 0.9, 0.3, 0.6]  # per block (cycled), below the combined technologies cost
 GAS_EXPORT_PRICE = [2.0, 6.0, 3.0, 8.0, 5.0, 9.0]  # per block (cycled), above the well's 0.5
