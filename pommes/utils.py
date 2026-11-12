@@ -3,6 +3,7 @@
 import datetime
 import logging
 import os
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -637,6 +638,7 @@ class TimeBlocks:
     first_hour: dict[int, DataArray]
     first_step_duration: dict[int, DataArray]
     start: dict[int, DataArray]
+    step: DataArray | None = None  # time_step_duration (hour), for block_mean
 
     @property
     def active(self) -> bool:
@@ -663,6 +665,107 @@ class TimeBlocks:
         return [str(x) for x in a[f"{module}_tech"].values[hit]]
 
 
+def _on(p: Dataset, flag: str) -> bool:
+    return flag in p and bool(p[flag])
+
+
+def _hits(hit: DataArray, dim: str, labels, other_dim=None):
+    """(label of ``dim``, label of ``other_dim``) bool matrix, True where ``hit`` holds for some other index."""
+    reduce = [d for d in hit.dims if d not in (dim, other_dim)]
+    if reduce:
+        hit = hit.any(reduce)
+    for d, lab in ((dim, labels[0]), (other_dim, labels[1])):
+        if d is None:
+            continue
+        hit = (
+            hit.reindex({d: lab}, fill_value=False)
+            if d in hit.dims
+            else hit.expand_dims({d: lab})
+        )
+    return hit.transpose(*[d for d in (dim, other_dim) if d]).values
+
+
+def _contributors(p: Dataset, tech_length: dict) -> dict:
+    """
+    Counted contributors per resource, in the order of section 4.3.
+
+    Returns ``{resource: [(kind, name, length)]}``, ``length`` NaN for hourly.
+    Factors are read on the full grid (a unit pinned to zero still counts).
+    """
+    res = p["resource"].values if "resource" in p.coords else np.array([])
+    out = {str(r): [] for r in res}
+
+    def add(kind, dim, hit, lengths=None):
+        names = p[dim].values
+        for i, j in zip(*np.nonzero(hit)):
+            L = np.nan if lengths is None else lengths[i]
+            out[str(res[j])].append((kind, str(names[i]), float(L)))
+
+    def factor(*names):
+        hit = None
+        for n in names:
+            if n in p:
+                x = p[n]
+                h = np.isfinite(x) & (x != 0)
+                hit = h if hit is None else hit | h
+        return hit
+
+    for module, kind in (
+        ("conversion", "conversion tech"),
+        ("combined", "combined tech"),
+    ):
+        if _on(p, module) and f"{module}_factor" in p:
+            dim = f"{module}_tech"
+            hit = _hits(
+                factor(f"{module}_factor"),
+                dim,
+                (p[dim].values, res),
+                "resource",
+            )
+            add(kind, dim, hit, tech_length[module].values)
+    if _on(p, "storage"):
+        hit = factor(
+            "storage_factor_in", "storage_factor_keep", "storage_factor_out"
+        )
+        if hit is not None:
+            add(
+                "storage tech",
+                "storage_tech",
+                _hits(
+                    hit,
+                    "storage_tech",
+                    (p.storage_tech.values, res),
+                    "resource",
+                ),
+            )
+    if _on(p, "transport") and "transport_resource" in p:
+        techs = p.transport_tech.values
+        hit = np.zeros((len(techs), len(res)), dtype=bool)
+        for j, r in enumerate(res):
+            by_res = p.transport_resource == r
+            if "transport_fuel_resource" in p:
+                fuel = p.transport_fuel_resource == r
+                if "transport_fuel_consumption" in p:
+                    fuel = fuel & np.isfinite(p.transport_fuel_consumption)
+                else:
+                    fuel = fuel & False
+                by_res = by_res | fuel
+            hit[:, j] = _hits(by_res, "transport_tech", (techs, None))
+        add("transport tech", "transport_tech", hit)
+    if _on(p, "process") and "process_factor" in p:
+        add(
+            "process tech",
+            "process_tech",
+            _hits(
+                factor("process_factor"),
+                "process_tech",
+                (p.process_tech.values, res),
+                "resource",
+            ),
+        )
+    return out
+
+
 def time_blocks(p: Dataset) -> TimeBlocks:
     """
     Block lengths and hour-to-block maps of the dataset ``p`` (pure function).
@@ -683,6 +786,9 @@ def time_blocks(p: Dataset) -> TimeBlocks:
     }
     resource_length = _length_along(
         p, "resource_time_block_hrs", "resource", None
+    )
+    resource_length, why_hourly = _derive_balance_lengths(
+        p, tech_length, resource_length
     )
     lengths = sorted(
         {
@@ -741,4 +847,147 @@ def time_blocks(p: Dataset) -> TimeBlocks:
             maps["first_hour"][L] = as_block(hours[first])
             maps["first_step_duration"][L] = as_block(d[first])
             maps["start"][L] = as_block(t0[first])
-    return TimeBlocks(tech_length, resource_length, **maps)
+    tb = TimeBlocks(
+        tech_length,
+        resource_length,
+        **maps,
+        step=p["time_step_duration"] if lengths else None,
+    )
+    if tb.active and why_hourly:
+        warnings.warn(
+            "Time blocks give no gain on these balances: "
+            + "; ".join(why_hourly)
+            + ". Force a length with resource_time_block_hrs.",
+            UserWarning,
+            stacklevel=2,
+        )
+    return tb
+
+
+def _derive_balance_lengths(p: Dataset, tech_length: dict, forced: DataArray):
+    """
+    Balance length per resource (section 4.3) with the nesting refusals.
+
+    Returns the length array (forced lengths override the derived ones) and
+    the why-hourly messages. Raises R4, R5 and R10.
+    """
+    if not any(
+        np.isfinite(a.values).any() for a in (*tech_length.values(), forced)
+    ):
+        return forced, []  # T0: nothing to derive, nothing to read
+    res = [str(r) for r in forced["resource"].values]
+    found = _contributors(p, tech_length)
+    values = forced.values.copy()
+    why = []
+    for i, r in enumerate(res):
+        hourly = [c for c in found[r] if np.isnan(c[2])]
+        block = [c for c in found[r] if not np.isnan(c[2])]
+        if np.isfinite(values[i]):
+            Lr = int(values[i])
+            for kind, name, L in block:
+                if int(L) % Lr and Lr % int(L):
+                    raise ValueError(
+                        f"{r}: {kind} {name} ({int(L)} h) and the forced "
+                        f"balance length ({Lr} h) do not nest (neither "
+                        f"divides the other)."
+                    )
+        elif block and hourly:
+            why.append(f"{r}: hourly because of {hourly[0][0]} {hourly[0][1]}")
+        elif block:
+            Lr = min(int(c[2]) for c in block)
+            for kind, name, L in block:
+                if int(L) % Lr:
+                    raise ValueError(
+                        f"{r}: {kind} {name} ({int(L)} h) is not a multiple "
+                        f"of the smallest block length of the balance "
+                        f"({Lr} h)."
+                    )
+            values[i] = Lr
+    out = xr.DataArray(values, dims="resource", coords={"resource": res})
+    if _on(p, "turpe") and "electricity" in res:
+        if np.isfinite(out.sel(resource="electricity").item()):
+            raise ValueError(
+                "electricity: a coarse balance (forced or derived) cannot be "
+                "priced by turpe, which needs the hourly profile of imports."
+            )
+    if len(res) and np.isfinite(values).all():
+        raise ValueError(
+            "Every resource balance is coarse: keep at least one hourly "
+            "resource (an idle one is enough)."
+        )
+    return out, why
+
+
+def check_block_daily_cap(p: Dataset, tb: TimeBlocks) -> None:
+    """R6: a block length must nest with the day when a daily cap is set."""
+    if "conversion_max_daily_production" not in p:
+        return
+    d = (
+        int(p["operation_day_duration"])
+        if "operation_day_duration" in p
+        else 24
+    )
+    cap = np.isfinite(p["conversion_max_daily_production"])
+    cap = cap.any([x for x in cap.dims if x != "conversion_tech"])
+    for tech in (
+        tb.tech_length["conversion"]
+        .dropna("conversion_tech")["conversion_tech"]
+        .values
+    ):
+        L = int(tb.tech_length["conversion"].sel(conversion_tech=tech))
+        capped = (
+            bool(cap.sel(conversion_tech=tech))
+            if "conversion_tech" in cap.dims
+            else bool(cap)
+        )
+        if capped and L % d and d % L:
+            raise ValueError(
+                f"{tech}: block length {L} h neither divides nor is a "
+                f"multiple of operation_day_duration ({d} h), with a "
+                f"conversion_max_daily_production."
+            )
+
+
+def check_block_flexdem(p: Dataset, tb: TimeBlocks) -> None:
+    """R9: flexdem windows and offset must be unions of the balance blocks."""
+    if not (_on(p, "flexdem") and "flexdem_demand" in p):
+        return
+    fd = p["flexdem_demand"] != 0
+    hrs = (
+        p["flexdem_conservation_hrs"]
+        if "flexdem_conservation_hrs" in p
+        else None
+    )
+    offset = (
+        float(p["flexdem_window_offset_hrs"])
+        if "flexdem_window_offset_hrs" in p
+        else 0.0
+    )
+    for r in tb.resource_length["resource"].values:
+        L = tb.resource_length.sel(resource=r).item()
+        if not np.isfinite(L):
+            continue
+        L = int(L)
+        sel = lambda x: x.sel(resource=r) if "resource" in x.dims else x  # noqa: E731
+        if not bool(sel(fd).any()):
+            continue
+        if hrs is not None:
+            for w in np.unique(sel(hrs).values):
+                if w > 0 and np.isfinite(w) and w % L:
+                    raise ValueError(
+                        f"{r}: flexdem_conservation_hrs = {w} is not a "
+                        f"multiple of the balance block length {L} h."
+                    )
+        if offset % L:
+            raise ValueError(
+                f"{r}: flexdem_window_offset_hrs = {offset} is not a "
+                f"multiple of the balance block length {L} h."
+            )
+
+
+def block_mean(x: DataArray, tb: TimeBlocks, L: int) -> DataArray:
+    """Duration-weighted mean of ``x`` over the blocks of ``L`` hours (section 4.2)."""
+    if "hour" not in x.dims:
+        return x
+    total = (tb.step * x).groupby(tb.block_of_hour[L]).sum(skipna=False)
+    return total / tb.duration[L]
