@@ -16,7 +16,7 @@ from linopy import Model
 
 from pommes.model.build_model import build_model
 from pommes.model.data_validation.dataset_check import check_inputs
-from pommes.tests.time_blocks_helper import solved, with_blocks
+from pommes.tests.time_blocks_helper import net_import_pairs, solved, with_blocks
 import pommes.utils
 from pommes.utils import (
     BLOCK_MODULES,
@@ -460,6 +460,13 @@ def test_carbon_with_a_block_technology_is_refused(parameters):
     for lengths in ({"combined": {"electric_boiler": 2}}, {"conversion": {"ocgt": 2}}):
         with pytest.raises(ValueError, match="carbon"):
             build_model(with_blocks(parameters, **lengths))
+
+
+def test_carbon_with_a_coarse_net_import_resource_is_refused():
+    """Carbon reads only the hourly net_import variable: a coarse balance would drop its emissions."""
+    p = net_import_pairs().assign(carbon=np.array(True))
+    with pytest.raises(ValueError, match="carbon"):
+        build_model(p)
 
 
 def test_the_time_map_guards_survive_python_O():
