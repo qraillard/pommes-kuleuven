@@ -16,7 +16,7 @@ from linopy import Model
 
 from pommes.model.build_model import build_model
 from pommes.model.data_validation.dataset_check import check_inputs
-from pommes.tests.time_blocks_helper import net_import_pairs, solved, with_blocks
+from pommes.tests.time_blocks_helper import _fixture, net_import_pairs, solved, with_blocks
 import pommes.utils
 from pommes.utils import (
     BLOCK_MODULES,
@@ -498,3 +498,11 @@ def test_block_name_rule_and_block_prefix_read_one_module_tuple():
     assert not _BLOCK_NAME.match("operation_conversion_power")
     with pytest.raises(ValueError, match="BLOCK_MODULES"):
         block_prefix("turpe", 6)
+
+
+def test_fixture_helper_names_a_parameter_that_is_not_a_conftest_fixture():
+    """Task 12 Minor: a builder asking for something else than a fixture of conftest gets a clear error."""
+    with pytest.raises(ValueError, match="no_such_fixture"):
+        _fixture("no_such_fixture")
+    with pytest.raises(ValueError, match="sort_coords_and_vars"):  # imported by conftest, not a fixture
+        _fixture("sort_coords_and_vars")

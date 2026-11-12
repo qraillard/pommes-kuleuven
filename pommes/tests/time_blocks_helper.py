@@ -638,6 +638,17 @@ def units_of(obj) -> list[tuple]:
     return [(a, t) for a in obj.indexes["area"] for t in obj.indexes[dim]]
 
 
+def binds(m, name, equality=False):
+    """Some live row of ``name`` has a non-zero dual or, for an inequality, a zero slack."""
+    con = m.constraints[name]
+    live = (con.vars != -1).any("_term")  # a row on a flexible variable (a masked variable leaves 0 <= 0)
+    dual = con.dual.where(live)
+    hit = abs(dual) > 1e-9
+    if not equality:  # the slack of an equality is always zero: only its dual says it matters
+        hit = hit | (abs((con.rhs - con.lhs.solution).where(live)) < 1e-9)
+    return bool(hit.any())
+
+
 def variables_in(m, con) -> set[str]:
     """Names of the variables with a live term (a label and a non-zero coefficient) in the left-hand side of ``con``."""
     labels, coeffs = con.lhs.vars.values, con.lhs.coeffs.values
@@ -1124,7 +1135,10 @@ def flexdem_short_block_dataset() -> xr.Dataset:
 
 
 def _ratio_cells(p: xr.Dataset) -> xr.Dataset:
-    """``p`` (a ``coarse_step_dataset`` of 4 h blocks) with ratios that bind and no flexdem ramp: area ``a`` meets the maximum, ``b`` the minimum."""
+    """
+    ``p`` (a ``coarse_step_dataset`` of 4 h blocks) with ratios that bind and no flexdem ramp: area ``a`` meets the
+    maximum, area ``b`` the minimum.
+    """
     cells = {"a": ([2.3, 9.1, 5.7, 2.9, 8.6, 11.3], 1.43, 0.5), "b": ([4.1, 8.3, 5.0, 9.4, 9.2, 4.2], 3.0, 0.83)}
     heat = list(p.resource.values).index("heat")
     demand = p.flexdem_demand.copy(deep=True)
@@ -1160,7 +1174,11 @@ def _fixture(name: str, _cache: dict = {}):
     from pommes.tests import conftest
 
     if name not in _cache:
-        function = getattr(conftest, name).__wrapped__
+        fixture = getattr(conftest, name, None)
+        # pytest assumption: a fixture function keeps the plain function it decorates in ``__wrapped__``
+        function = getattr(fixture, "__wrapped__", None)
+        if function is None:
+            raise ValueError(f"{name!r} is not a fixture of pommes/tests/conftest.py: a builder can only use those")
         _cache[name] = function(*[_fixture(a) for a in inspect.signature(function).parameters])
     return _cache[name].copy(deep=True)
 
@@ -1185,10 +1203,10 @@ def _whole_base() -> xr.Dataset:
 
     One vintage and one year of operation (the fixture prices its vintages alike, so the capacities of several years
     can be split in several ways at the same cost, and the twin comparison of capacities needs one optimum). The
-    fixture alone imports nothing and emits nothing: here heat may be imported at a price that is low for two steps in four
-    and high otherwise (``HEAT_IMPORT_PRICE_PER_STEP``: a flat block boiler cannot follow it; no yearly maximum), with an emission factor taxed by the
-    fixture's carbon tax (the carbon goal is NaN: a binding goal would tie the two areas). The electric boiler covers
-    the rest of the heat. Every other price keeps the fixture's value, which does not depend on the hour.
+    fixture alone imports nothing and emits nothing: here heat may be imported at a price that is low for two steps in
+    four and high otherwise (``HEAT_IMPORT_PRICE_PER_STEP``: a flat block boiler cannot follow it; no yearly maximum),
+    with an emission factor taxed by the fixture's carbon tax (the carbon goal is NaN: a binding goal would tie the two
+    areas). The electric boiler covers the rest of the heat. Every other price keeps the fixture's value, which does not depend on the hour.
     """
     p = _fixture("parameters").sel(year_dec=[2040], year_inv=[2020], year_op=[2020])
     p = priced_spillage(with_idle(p))
@@ -1229,8 +1247,10 @@ def whole_t2_dataset() -> xr.Dataset:
     relaxation of the twin and not an equality (D9').
     """
     p = _whole_base()
-    # the electrolyser runs on blocks: give it an emission factor so that block technologies emit (it is 0 in the fixture)
-    p["conversion_emission_factor"] = p.conversion_emission_factor.where(p.conversion_tech != "electrolysis", T2_ELECTROLYSIS_FACTOR)
+    # the electrolyser runs on blocks: give it an emission factor so that block technologies emit (0 in the fixture)
+    p["conversion_emission_factor"] = p.conversion_emission_factor.where(
+        p.conversion_tech != "electrolysis", T2_ELECTROLYSIS_FACTOR
+    )
     return with_blocks(
         p,
         conversion={t: 2 for t in p.conversion_tech.values if t != "wind_onshore"},
@@ -1348,9 +1368,9 @@ def retrofit_combined_block_dataset() -> xr.Dataset:
     """
     A combined retrofit ``electric_boiler`` -> ``boiler_block`` that transfers capacity: source hourly, target on 2 h.
 
-    ``combined_toy`` over 6 steps and the retrofit years: ``electric_boiler`` is buildable in 2020 only, ``boiler_block``
-    (cheaper to run) only by retrofit in 2040, ``steady_kiln`` is pinned to zero; the hourly ``heater`` covers what the
-    boilers cannot. The reverse direction: ``with_blocks(p, combined={"electric_boiler": 2})``.
+    ``combined_toy`` over 6 steps and the retrofit years: ``electric_boiler`` is buildable in 2020 only,
+    ``boiler_block`` (cheaper to run) only by retrofit in 2040, ``steady_kiln`` is pinned to zero; the hourly ``heater``
+    covers what the boilers cannot. The reverse direction: ``with_blocks(p, combined={"electric_boiler": 2})``.
     """
     p = _on_retrofit_years(combined_toy([1.0] * 6), {"combined": 3.0, "conversion": 0.0})
     p["combined_power_capacity_max"] = (("area", "combined_tech"), [[np.nan, np.nan, 0.0]] * 2)
@@ -1362,17 +1382,26 @@ def retrofit_combined_block_dataset() -> xr.Dataset:
     return with_blocks(p, combined={"boiler_block": 2})
 
 
+def retrofit_source_block_dataset(module: str) -> xr.Dataset:
+    """The retrofit dataset of ``module`` ("conversion" or "combined") with the block on the source, the target hourly."""
+    builder, source = {
+        "conversion": (retrofit_conversion_block_dataset, "old"),
+        "combined": (retrofit_combined_block_dataset, "electric_boiler"),
+    }[module]
+    return with_blocks(builder(), **{module: {source: 2}})
+
+
 # --- the uniform coarse step with net_import and carbon (T3(c)), operating conditions (section 16.5) ---
 
 
 def t3c_dataset() -> xr.Dataset:
-    """``coarse_step_dataset(4, 24, net_import=True, carbon=True)``: window, ramps, both yearly maxima and the tax bind."""
+    """``coarse_step_dataset(4, 24, net_import=True, carbon=True)``: window, ramps, both yearly maxima, the tax bind."""
     return coarse_step_dataset(4, 24, net_import=True, carbon=True)
 
 
 def t3c_ratio_dataset() -> xr.Dataset:
     """
-    ``t3c_dataset`` without carbon, with the ratios of ``flexdem_ratio_dataset`` (the ratio rows bind, the ramps are off).
+    ``t3c_dataset`` without carbon, with the ratios of ``flexdem_ratio_dataset`` (the ratio rows bind, no ramp).
 
     Carbon is left out: with the ratios the optimum has two modes of a combined technology at the same cost (the
     objective is unique, the emissions are not), so the yearly totals would not compare.
@@ -1384,16 +1413,17 @@ def conditions_block_dataset() -> xr.Dataset:
     """
     The hand toy on 8 steps with steel forced to 2 h, built so that the dual of each coarse row is unique.
 
-    ``power`` is a second, hourly resource (see below). The furnace (on blocks of 2 h) is capped at 1 MW and steel may be shed at 7 per MWh: blocks that ask for more than 2 MWh (steps
-    (3, 3) and (1.5, 1.5)) pay the shedding cost at the margin, the others (steps (0.5, 0.7) and (0.2, 0.4)) the
+    ``power`` is a second, hourly resource (see below). The furnace (on blocks of 2 h) is capped at 1 MW and steel may
+    be shed at 7 per MWh: blocks that ask for more than 2 MWh (steps (3, 3) and (1.5, 1.5)) pay the shedding cost at the
+    margin, the others (steps (0.5, 0.7) and (0.2, 0.4)) the
     furnace's variable cost, so the coarse prices are 7n, vn, 7n, vn (n = operation_year_normalization).
     """
     p = hand_toy([1.0] * 8, [3.0, 3.0, 0.5, 0.7, 1.5, 1.5, 0.2, 0.4])
     p["conversion_power_capacity_max"] = (("area", "conversion_tech"), [[1.0]])
     p["load_shedding_max_capacity"] = ("resource", [0.0, np.nan])
     p["load_shedding_cost"] = ("resource", [0.0, 7.0])
-    # an hourly resource with a priced, binding demand (shed at 5 per MWh, nothing produces it): its hourly adequacy duals are
-    # 5n, not zero
+    # an hourly resource with a priced, binding demand (shed at 5 per MWh, nothing produces it): its hourly adequacy
+    # duals are 5n, not zero
     names = [*p.resource.values, "power"]
     out = p.reindex(resource=names)
     for name in p.data_vars:
@@ -1413,10 +1443,12 @@ def net_import_twin_dataset() -> xr.Dataset:
 
 def net_import_expected_conditions_dataset() -> xr.Dataset:
     """
-    ``coarse_step_dataset(4, 24, net_import=True)`` under two conditions (weights 0.4 and 0.6) with both yearly maxima on the expectation.
+    ``coarse_step_dataset(4, 24, net_import=True)`` under two conditions (weights 0.4 and 0.6), both yearly maxima on
+    the expectation.
 
     The second condition has import prices 1.5 times and export prices 0.8 times the first one's, so that the
-    conditions import and export differently; ``net_import_max_yearly_energy_import_expected`` and ``..._export_expected`` are on.
+    conditions import and export differently; ``net_import_max_yearly_energy_import_expected`` and
+    ``..._export_expected`` are on.
     """
     p = net_import_twin_dataset()
     p = with_conditions(

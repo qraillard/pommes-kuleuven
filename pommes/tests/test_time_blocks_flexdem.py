@@ -9,6 +9,7 @@ from pommes.model.build_model import build_model
 from pommes.model.flexdem import add_flexdem
 from pommes.tests.time_blocks_helper import (
     BLOCK_PARAMETERS,
+    binds,
     check_coarse_step_contract,
     coarse_step_dataset,
     coarse_step_reference,
@@ -111,17 +112,6 @@ def test_coarse_step_contract():
     np.testing.assert_allclose(ref.rename(hour="time_block_4h").transpose(*block.dims).values, block.values)
 
 
-def _binds(m, name, equality=False):
-    """Some live row of ``name`` has a non-zero dual or, for an inequality, a zero slack."""
-    con = m.constraints[name]
-    live = (con.vars != -1).any("_term")  # a row on a flexible variable (a masked variable leaves 0 <= 0)
-    dual = con.dual.where(live)
-    hit = abs(dual) > 1e-9
-    if not equality:  # the slack of an equality is always zero: only its dual says it matters
-        hit = hit | (abs((con.rhs - con.lhs.solution).where(live)) < 1e-9)
-    return bool(hit.any())
-
-
 @pytest.mark.parametrize(
     "case, rows",
     [
@@ -143,7 +133,7 @@ def test_coarse_flexdem_equals_uniform_coarse_step(case, rows):
     heat_demand = reference_dataset.flexdem_demand.sel(resource="heat").transpose("area", "hour", "year_op").values
     assert np.abs(block.sel(resource="heat").values - heat_demand[:, :, None, :].squeeze(2)).max() > 0.1  # demand shifts
     for name in rows:
-        assert _binds(m, f"{BLOCK}{name}", equality=name.startswith("demand_conservation")), name
+        assert binds(m, f"{BLOCK}{name}", equality=name.startswith("demand_conservation")), name
 
 
 def test_window_of_four_blocks():

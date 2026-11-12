@@ -12,12 +12,11 @@ import xarray as xr
 
 from pommes.model.build_model import build_model
 from pommes.tests.conditions_helper import assert_condition_dims_consistent, with_conditions
-from pommes.tests.test_time_blocks_flexdem import _binds
 from pommes.tests.time_blocks_helper import (
     BLOCK_PARAMETERS,
     assert_same,
     assert_twin_equal,
-    coarse_step_dataset,
+    binds,
     coarse_step_reference,
     conditions_block_dataset,
     flat_twin,
@@ -25,6 +24,7 @@ from pommes.tests.time_blocks_helper import (
     net_import_twin_dataset,
     retrofit_combined_block_dataset,
     retrofit_conversion_block_dataset,
+    retrofit_source_block_dataset,
     solve_model,
     solved,
     T2_ELECTROLYSIS_FACTOR,
@@ -40,8 +40,9 @@ from pommes.tests.time_blocks_helper import (
 )
 from pommes.utils import block_dim, condition_dual_scale, time_blocks
 
-# a balance that no technology of a whole model can make coarse says so once per build: not what these tests are about
-pytestmark = pytest.mark.filterwarnings("ignore:Time blocks give no gain")
+# a balance that no technology of a whole model can make coarse says so once per build: the tests that build such a
+# model (the models are cached, so every test that reads one of them) expect it
+no_gain = pytest.mark.filterwarnings("ignore:Time blocks give no gain")
 
 EMISSIONS = "operation_carbon_emissions"
 
@@ -67,12 +68,6 @@ def _conditioned(p):
     return with_conditions(p, [0.25, 0.75])
 
 
-def _retrofit_reverse(module):
-    """The retrofit dataset of ``module`` with the block on the source and the target hourly."""
-    p = RETROFIT[module][0]()
-    return with_blocks(p, **{module: {RETROFIT[module][1]: 2}})
-
-
 # the retrofit pair of each module: (builder, source, target)
 RETROFIT = {
     "conversion": (retrofit_conversion_block_dataset, "old", "new"),
@@ -90,11 +85,10 @@ BUILDERS = {
     "t3c_ratio": t3c_ratio_dataset,
     "net_import_maxima": net_import_twin_dataset,
     "net_import_expected": net_import_expected_conditions_dataset,
-    "net_import_carbon": lambda: coarse_step_dataset(4, 24, net_import=True, carbon=True),
     "retrofit_conversion_target": RETROFIT["conversion"][0],
-    "retrofit_conversion_source": lambda: _retrofit_reverse("conversion"),
+    "retrofit_conversion_source": lambda: retrofit_source_block_dataset("conversion"),
     "retrofit_combined_target": RETROFIT["combined"][0],
-    "retrofit_combined_source": lambda: _retrofit_reverse("combined"),
+    "retrofit_combined_source": lambda: retrofit_source_block_dataset("combined"),
     "conditions": conditions_block_dataset,
     "conditions_even": lambda: with_conditions(conditions_block_dataset(), [0.5, 0.5]),
     "conditions_two": lambda: _conditioned(conditions_block_dataset()),
@@ -135,6 +129,7 @@ def test_the_idle_resource_changes_nothing(parameters):
 # --- T1: block length = step ---
 
 
+@no_gain
 def test_t1_whole_model():
     """Every conversion and combined length is the step: every value equals the hourly model, hour by hour."""
     p = whole_t1_dataset()
@@ -163,6 +158,7 @@ def test_t1_whole_model():
 # --- T2: the flat twin, every balance at the step ---
 
 
+@no_gain
 def test_t2_whole_model_flat_twin():
     """Block conversion and combined technologies on hourly balances equal the flat twin, emissions hour by hour."""
     p = whole_t2_dataset()
@@ -188,6 +184,7 @@ def test_t2_whole_model_flat_twin():
 def test_t3b_forced_coarse_is_a_relaxation():
     """Methane and hydrogen forced to 2 h: no dearer than hourly; each coarse row holds the demand of its block."""
     p = whole_t3b_dataset()
+    assert not bool(p.get("flexdem", False))  # no flexible demand, hence no ramp: the coarse model can only relax
     tb = time_blocks(p)
     assert tb.resources(2) == ["hydrogen", "methane"]
     assert p.sizes["hour"] % 2 == 1 and list(tb.duration[2].values) == [2.0, 2.0, 2.0, 2.0, 1.0]  # a short last block
@@ -197,7 +194,8 @@ def test_t3b_forced_coarse_is_a_relaxation():
             if "hour" in x.dims:
                 assert float(x.groupby(tb.block_of_hour[2]).std().max()) == 0.0, (resource, name)
     m, hourly = solved_model("t3b"), solved_model("t3b_hourly")
-    assert m.objective.value <= hourly.objective.value + 1e-6 * abs(hourly.objective.value)
+    # strictly cheaper on this dataset (probed: 25 964 567 against 25 964 755)
+    assert m.objective.value < hourly.objective.value - 1e-6
     rhs = m.constraints["operation_adequacy_block_2h_constraint"].rhs
     block_sum = p.demand.fillna(0).groupby(tb.block_of_hour[2]).sum().sel(resource=tb.resources(2))
     assert list(rhs.indexes["resource"]) == tb.resources(2)
@@ -263,13 +261,13 @@ def _assert_equals_reference(key, with_conversion):
     ids=["window_and_ramps", "ratios"],
 )
 def test_t3c_uniform_coarse_step(key, rows):
-    """T3(c): ratios, window, ramps and both yearly maxima equal today's model run with steps of 4 h; each family binds."""
+    """T3(c): ratios, window, ramps and both yearly maxima equal today's model with steps of 4 h; each family binds."""
     _assert_equals_reference(key, with_conversion=key == "t3c")
     m = solved_model(key)
     for name in rows:
-        assert _binds(m, name, equality="conservation" in name), name
+        assert binds(m, name, equality="conservation" in name), name
     for kind in ("import", "export"):  # the yearly maxima of net_import
-        assert _binds(m, f"operation_net_import_block_{L}h_{kind}_yearly_max_constraint"), kind
+        assert binds(m, f"operation_net_import_block_{L}h_{kind}_yearly_max_constraint"), kind
     if bool(BUILDERS[key]().carbon):
         assert float(solved(m, "operation_carbon_costs").sum()) > 1e-3  # the tax is paid
         free = solve_model(build_model(BUILDERS[key]().assign(carbon_tax=np.array(0.0))))
@@ -279,30 +277,33 @@ def test_t3c_uniform_coarse_step(key, rows):
 # --- net_import at scale (section 16.2) ---
 
 
-@pytest.mark.parametrize("key", ["net_import_maxima", "net_import_expected", "net_import_carbon"])
+@pytest.mark.parametrize("key", ["net_import_maxima", "net_import_expected", "t3c"])
 def test_net_import_twin_at_scale(key):
     """
     Constant-price blocks against steps of 4 h: binding import and export maxima; both on the expectation under two
-    conditions; a binding carbon tax. Objective, the imports block by block and the total exports equal (the export distribution has several optima).
+    conditions; a binding carbon tax. Objective, the imports block by block and the total exports equal (the export
+    distribution has several optima).
     """
     m, reference = solved_model(key), reference_model(key, L)
     assert m.objective.value == pytest.approx(reference.objective.value, rel=1e-7)
     for kind, resource in (("import", "heat"), ("export", "gas")):
         got = solved(m, f"operation_net_import_block_{L}h_{kind}").sel(resource=resource).rename({block_dim(L): "hour"})
         want = solved(reference, f"operation_net_import_{kind}").sel(resource=resource)
-        if kind == "import":  # one optimum block by block; the export is unique only as a total (shifts between blocks and areas)
+        # one optimum block by block; the export is unique only as a total (shifts between blocks and areas)
+        if kind == "import":
             assert_same(got, want, kind)
         else:
             np.testing.assert_allclose(float(got.sum()), float(want.sum()), rtol=1e-6, err_msg=kind)
         assert float(got.max()) > 0.1  # the rest of the world is used
         row = f"operation_net_import_block_{L}h_{kind}_yearly_max_constraint"
-        assert _binds(m, row), row  # the maximum binds
+        assert binds(m, row), row  # the maximum binds
         if key == "net_import_expected":
             assert "operating_condition" not in m.constraints[row].labels.dims  # one row per year, on the expectation
-    if key == "net_import_carbon":
+    if key == "t3c":  # the tax binds
         free = BUILDERS[key]().assign(carbon_tax=np.array(0.0))
         free_emissions = solve_model(build_model(free))
-        assert float(solved(m, EMISSIONS).sum()) < float(solved(free_emissions, EMISSIONS).sum()) - 1e-6  # the tax binds
+        # the tax binds
+        assert float(solved(m, EMISSIONS).sum()) < float(solved(free_emissions, EMISSIONS).sum()) - 1e-6
         assert float(solved(m, "operation_carbon_costs").sum()) > 1e-3
         got, want = solved(m, EMISSIONS).sum("hour"), solved(reference, EMISSIONS).sum("hour")
         np.testing.assert_allclose(got.values, want.transpose(*got.dims).values, atol=1e-6)
@@ -333,6 +334,7 @@ def _retrofit_twin(module, side):
     return transfer
 
 
+@no_gain
 @pytest.mark.parametrize("module", ["conversion", "combined"])
 def test_retrofit_hourly_source_block_target(module):
     """The source is hourly and the target on blocks: objective, transfers and capacities equal the flat twin."""
@@ -341,6 +343,7 @@ def test_retrofit_hourly_source_block_target(module):
     _retrofit_twin(module, "target")
 
 
+@no_gain
 @pytest.mark.parametrize("module", ["conversion", "combined"])
 def test_retrofit_block_source_hourly_target(module):
     """The source is on blocks and the target hourly: objective, transfers and capacities equal the flat twin."""
@@ -349,6 +352,7 @@ def test_retrofit_block_source_hourly_target(module):
     _retrofit_twin(module, "source")
 
 
+@no_gain
 @pytest.mark.parametrize("module, side", RETROFIT_CASES)
 def test_retrofit_rows_read_no_operation_variable(module, side):
     """No retrofit row has a term of a variable with an ``hour`` or ``time_block_*`` dimension (read on the labels)."""
@@ -367,6 +371,7 @@ def test_retrofit_rows_read_no_operation_variable(module, side):
     assert f"planning_retrofit_{module}_power_capacity" in variables_in(m, host)
 
 
+@no_gain
 @pytest.mark.parametrize("module, side", RETROFIT_CASES)
 def test_retrofit_unit_index_unchanged_by_blocks(module, side):
     """The index of ``planning_<module>_power_capacity`` (the unit index a sparse retrofit reads) ignores the blocks."""
@@ -385,15 +390,16 @@ def test_retrofit_unit_index_unchanged_by_blocks(module, side):
 # --- operating conditions (section 16.5) ---
 
 
+@no_gain
 def test_block_models_have_consistent_condition_dims():
-    """No row of a block model has a term on a dimension the row lacks (every model of this file, conditions included)."""
+    """No row of a block model has a term on a dimension the row lacks (every model here, conditions included)."""
     assert any("operating_condition" in built(k).variables[n].dims for k in ("net_import_expected", "conditions_two") for n in built(k).variables)
     for key in BUILDERS:
         assert_condition_dims_consistent(built(key))
 
 
 def test_two_identical_conditions_are_neutral_with_blocks():
-    """Two conditions of weight 1/2 and the same inputs give the optimum without conditions, block variables included."""
+    """Two conditions of weight 1/2 and the same inputs give the optimum without conditions, block variables too."""
     m0, m2 = solved_model("conditions"), solved_model("conditions_even")
     assert m2.objective.value == pytest.approx(m0.objective.value, rel=1e-9)
     for name in ("operation_conversion_block_2h_power", "operation_load_shedding_block_2h_power", "operation_spillage_block_2h_power"):
