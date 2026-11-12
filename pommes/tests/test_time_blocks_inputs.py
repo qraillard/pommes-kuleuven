@@ -254,3 +254,20 @@ def test_blocks_anchor_at_the_first_step_of_a_slice(parameters):
     assert tb.block_of_hour[4].values.tolist() == [0, 0, 0, 0, 1, 1, 1]
     assert tb.start[4].values.tolist() == [0, 4]
     assert tb.first_hour[4].values.tolist() == [3, 7]
+
+
+def test_check_inputs_runs_the_time_block_checks(parameters):
+    with pytest.raises(ValueError, match="ocgt"):
+        check_inputs(blocks(parameters, conversion={"ocgt": 1.5}))
+    p = blocks(parameters, conversion={"ocgt": 4}, steps=[1])
+    p["time_step_duration"][3] = 0.0
+    with pytest.raises(ValueError, match="time_step_duration"):
+        check_inputs(p)
+    p = parameters.copy()
+    p["conversion_time_block_rule"] = xr.DataArray(
+        np.array(["min", "mni", "min", "min", "min"]),
+        dims="conversion_tech",
+        coords={"conversion_tech": p.conversion_tech.values},
+    )
+    with pytest.raises(ValueError, match="ocgt.*mni"):
+        check_inputs(p)
