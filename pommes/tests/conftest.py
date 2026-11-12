@@ -7,6 +7,33 @@ from xarray import Dataset
 
 from pommes.utils import sort_coords_and_vars, square_array_by_diagonals
 
+# --- Slow tier ---
+# The tests marked ``slow`` (the 8760 h cells of the time-blocks tests: up to minutes
+# and some memory each) are collected but skipped, with a visible reason, unless ``--runslow`` is
+# given. This is the standard opt-in recipe of the pytest documentation. It replaces ``addopts = "-m 'not slow'"`` in
+# pyproject.toml, which deselected a slow test silently even when it was named by its node id, and which any ``-m`` of
+# the user replaced.
+# ``pytest --runslow`` runs everything, ``pytest --runslow -m slow`` only the slow tier.
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--runslow",
+        action="store_true",
+        default=False,
+        help="also run the tests marked slow (cells of up to 8760 h)",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--runslow"):
+        return
+    skip_slow = pytest.mark.skip(reason="slow cell: use --runslow")
+    for item in items:
+        if item.get_closest_marker("slow") is not None:
+            item.add_marker(skip_slow)
+
+
 # --- Test model ---
 
 

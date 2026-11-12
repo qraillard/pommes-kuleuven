@@ -177,6 +177,18 @@ def test_check_block_dims_fires():
     check_block_dims(build_model(hand_toy_b()))  # a clean block model passes
 
 
+def test_check_block_dims_name_rule_reads_the_start_of_the_name():
+    """A user label that looks like a block prefix, inside an hourly name, must not trip the rule."""
+    hour = xr.DataArray(np.arange(2), dims="hour", name="hour")
+    m = Model()
+    m.add_variables(coords=[hour], name="operation_combined_mode_ramp_up_constraint_a_block_2h_b")
+    check_block_dims(m)
+    m = Model()
+    m.add_variables(coords=[hour], name="operation_flexdem_block_4h_demand")
+    with pytest.raises(RuntimeError, match="operation_flexdem_block_4h_demand"):
+        check_block_dims(m)
+
+
 @pytest.mark.filterwarnings("ignore:Time blocks give no gain")
 def test_no_sel_without_a_coarse_resource(parameters, monkeypatch):
     def forbidden(*args, **kwargs):

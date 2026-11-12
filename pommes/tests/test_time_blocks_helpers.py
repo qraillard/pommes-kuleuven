@@ -1,6 +1,8 @@
 """change_resolution and add_to_balances (multi-resolution, sections 7-8)."""
 
 import dataclasses
+import subprocess
+import sys
 import warnings
 from types import SimpleNamespace
 
@@ -447,3 +449,21 @@ def test_carbon_with_a_block_technology_is_refused(parameters):
     for lengths in ({"combined": {"electric_boiler": 2}}, {"conversion": {"ocgt": 2}}):
         with pytest.raises(ValueError, match="carbon"):
             build_model(with_blocks(parameters, **lengths))
+
+
+def test_the_time_map_guards_survive_python_O():
+    """Minor 4: ``check_group`` and ``check_axis`` raise explicitly, so ``python -O`` keeps them."""
+    code = (
+        "import numpy as np, pandas as pd, xarray as xr\n"
+        "from pommes.utils import check_axis, check_group\n"
+        "g = xr.DataArray(np.zeros((2, 2)), dims=('hour', 'x'))\n"
+        "for call in (lambda: check_group(g, None),\n"
+        "             lambda: check_axis(xr.DataArray([0, 1], dims='hour', coords={'hour': [1, 0]}), 'hour', pd.Index([0, 1]))):\n"
+        "    try:\n"
+        "        call()\n"
+        "    except AssertionError:\n"
+        "        continue\n"
+        "    raise SystemExit('a guard was dropped')\n"
+    )
+    run = subprocess.run([sys.executable, "-O", "-c", code], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr or run.stdout

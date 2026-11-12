@@ -20,13 +20,13 @@ from pommes.model import (
     add_flexdem
 )
 from pommes.utils import (
-    OPERATING_CONDITION,
     OPERATING_CONDITION_WEIGHT,
     block_dim,
     check_block_dims,
     condition_coords,
     condition_mask,
     expected_over_conditions,
+    select_resources,
     time_blocks,
 )
 
@@ -44,10 +44,7 @@ _READ = (
 
 def _select_resources(p, resources):
     """``p`` restricted to ``resources``, on the names read here only."""
-    q = p[[n for n in _READ if n in p]]
-    dims = ("area", "hour", "resource", "year_op", OPERATING_CONDITION)
-    q = q.assign_coords({d: p[d] for d in dims if d in p.coords})
-    return q.sel(resource=resources)
+    return select_resources(p, _READ, resources)
 
 
 def build_model(model_parameters: Dataset) -> Model:

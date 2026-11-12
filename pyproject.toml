@@ -59,6 +59,15 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.package-data]
 "*" = ["*.csv", "*.yaml"]
 
+[tool.pytest.ini_options]
+# All the tests live in pommes/tests. The option --runslow is declared in pommes/tests/conftest.py, which pytest reads
+# before parsing the command line only if it is on the way to a path that is collected: without testpaths, a bare
+# ``pytest --runslow`` from the root folder would fail with "unrecognized arguments".
+testpaths = ["pommes/tests"]
+markers = [
+    "slow: long cells (8760 h), skipped unless --runslow is given (see pommes/tests/conftest.py)",
+]
+
 # Formatter and linter settings
 
 [tool.ruff]

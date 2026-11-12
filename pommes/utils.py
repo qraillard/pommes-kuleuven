@@ -1058,22 +1058,21 @@ def longest_day_in_blocks(tb: TimeBlocks, L: int, d: int) -> DataArray:
     ).sum()
     longest = per_day.groupby(level=0).max()
     dim = block_dim(L)
-    assert longest.index.equals(tb.duration[L].indexes[dim])
+    if not longest.index.equals(tb.duration[L].indexes[dim]):
+        raise AssertionError(f"the days of the blocks do not follow {dim}")
     return xr.DataArray(longest.values, dims=dim, coords={dim: longest.index.values})
 
 
 def check_group(group: DataArray, T_L: str | None) -> None:
     """H3: a groupby array is 1-D over ``hour`` or the block dimension."""
-    assert group.ndim == 1 and group.dims in {("hour",), (T_L,)}, (
-        group.dims
-    )
+    if not (group.ndim == 1 and group.dims in {("hour",), (T_L,)}):
+        raise AssertionError(group.dims)
 
 
 def check_axis(expr, dim: str, ref: pd.Index) -> None:
     """M1: linopy's groupby and ``isel`` act by position, so the axis must be the map's."""
-    assert expr.indexes[dim].equals(ref), (
-        f"{dim} of the expression is not the time map's axis"
-    )
+    if not expr.indexes[dim].equals(ref):
+        raise AssertionError(f"{dim} of the expression is not the time map's axis")
 
 
 def change_resolution(expr, tb: TimeBlocks, src: int | None, dst: int | None):
@@ -1178,6 +1177,12 @@ def add_to_balances(adequacy, expr, tb: TimeBlocks, src: int | None = None) -> N
     ), "resource not routed exactly once"
 
 
+# ``operation_<module>_block_{L}h_`` at the start of a name: a mode label inside an hourly name cannot match
+_BLOCK_NAME = re.compile(
+    r"operation_(?:adequacy|load_shedding|spillage|conversion|combined|flexdem|net_import|carbon)_block_\d+h_"
+)
+
+
 def check_block_dims(m) -> None:
     """
     H5: no term carries a dimension its row lacks, no object mixes resolutions.
@@ -1208,7 +1213,7 @@ def check_block_dims(m) -> None:
                         f"{kind} {name}: dimensions {sorted(d)} mix "
                         f"resolutions (H5)."
                     )
-                if "hour" in d and re.search(r"_block_\d+h_", name):
+                if "hour" in d and _BLOCK_NAME.match(name):
                     # a block row built with a per-step parameter keeps the hour
                     # dimension of that parameter (and no block one)
                     raise RuntimeError(
@@ -1230,6 +1235,21 @@ def check_group_coord(obj, ref: pd.Index, dim: str) -> None:
             f"{getattr(obj, 'name', obj)}: {dim} is not the group's "
             f"coordinate (H1/H2): {list(obj.indexes[dim])} != {list(ref)}."
         )
+
+
+def select_resources(p: Dataset, names, resources) -> Dataset:
+    """
+    ``p`` restricted to ``resources``, on the ``names`` read only (C5).
+
+    A dataset-level ``sel``: the masks and parameters of a group share the
+    subset coordinate and no other resource-indexed parameter is copied
+    (section 8.2). Only for a dataset with a coarse resource: without one the
+    group is ``p`` itself.
+    """
+    q = p[[n for n in names if n in p]]
+    dims = ("area", "hour", "resource", "year_op", OPERATING_CONDITION)
+    q = q.assign_coords({d: p[d] for d in dims if d in p.coords})
+    return q.sel(resource=resources)
 
 
 def block_prefix(module: str, L: int | None) -> str:

@@ -55,9 +55,12 @@ def conversion_groups(
     )
     out = []
     for L, part in parts.items():
-        p_g = p.sel(conversion_tech=list(part))
-        if L is not None:
-            p_g = p_g.drop_vars("conversion_availability", errors="ignore")
+        if L is None:
+            p_g = p.sel(conversion_tech=list(part))
+        else:  # no copy of the hourly availability: the group holds its block value
+            p_g = p.drop_vars("conversion_availability", errors="ignore").sel(
+                conversion_tech=list(part)
+            )
             p_g = p_g.assign(
                 conversion_block_availability=conversion_block_availability(
                     p, tb, L, list(part)

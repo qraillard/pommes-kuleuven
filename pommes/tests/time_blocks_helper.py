@@ -11,7 +11,7 @@ import pytest
 import xarray as xr
 
 from pommes.model.build_model import build_model
-from pommes.utils import TimeBlocks, time_blocks
+from pommes.utils import TimeBlocks, block_dim, block_mean, time_blocks
 
 try:  # sparse engine: solved variables sit on a unit index
     from pommes.model.sparsity import densify_any
@@ -709,3 +709,196 @@ def must_run_relaxation_dataset() -> xr.Dataset:
     p["conversion_must_run"] = ("conversion_tech", [1.0, np.nan])
     p = per_tech(p, "conversion_availability", {"furnace": [1.0, 0.5, 1.0, 0.5]})
     return with_blocks(p, conversion={"furnace": 2})
+
+
+# --- the uniform coarse step (T3(c), section 15.2), Task 7 ---
+
+# conversion and combined ramps and the daily cap are NaN on the datasets below: block ramps divide by the
+# first step's duration and the block daily cap counts days, both on purpose (they differ from today's code)
+_NO_RAMPS = (
+    "conversion_ramp_up",
+    "conversion_ramp_down",
+    "combined_ramp_up",
+    "combined_ramp_down",
+    "combined_mode_ramp_up",
+    "combined_mode_ramp_down",
+    "conversion_max_daily_production",
+)
+_STEP_SUMS = ("demand", "flexdem_demand")  # energies per step: summed per block
+_STEP_MEANS = (  # per-hour parameters: Δ-weighted mean per block, NaN read as 1 first (section 6.1)
+    "conversion_availability",
+    "net_import_import_price",
+    "net_import_export_price",
+    "net_import_emission_factor",
+    "net_import_total_emission_factor",
+)
+
+
+def _check_no_ramps(p: xr.Dataset) -> None:
+    for name in _NO_RAMPS:
+        if name in p and np.isfinite(p[name]).any():
+            raise AssertionError(f"{name} is finite: the uniform coarse step has no ramp and no daily cap (C17)")
+
+
+def _check_availability_is_all_or_nothing(p: xr.Dataset) -> None:
+    if "conversion_availability" not in p:
+        return
+    a = p["conversion_availability"]
+    other = [d for d in a.dims if d != "conversion_tech"]
+    some = np.isfinite(a).any(other) if other else np.isfinite(a)
+    every = np.isfinite(a).all(other) if other else np.isfinite(a)
+    if bool((some & ~every).any()):
+        raise AssertionError("a technology has a partly-NaN availability: NaN reads as 1 in the block model (C17)")
+
+
+def check_coarse_step_contract(p: xr.Dataset) -> None:
+    """C17: every ramp, mode-pair ramp and daily cap NaN, each availability all-NaN or all-finite (raises ``AssertionError``)."""
+    _check_no_ramps(p)
+    _check_availability_is_all_or_nothing(p)
+
+
+def coarse_step_reference(p: xr.Dataset, L: int) -> xr.Dataset:
+    """
+    Today's dataset with steps of ``L`` hours: the reference of the uniform coarse step (T3(c)).
+
+    ``hour`` becomes one label per block of ``p``, ``time_step_duration`` the block durations, ``demand`` and
+    ``flexdem_demand`` are summed per block, ``conversion_availability`` and the four net_import hourly parameters
+    are the Δ-weighted mean per block (``block_mean``, NaN read as 1 first, as the block model does, section 6.1). The
+    block inputs are removed, so that ``build_model`` runs today's code on it. Raises ``AssertionError`` on a finite
+    ramp or daily cap (the block rows differ from today's there, on purpose) and ``ValueError`` on any other
+    per-hour parameter.
+    """
+    _check_no_ramps(p)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tb = time_blocks(p)
+    if L not in tb.block_of_hour:
+        raise ValueError(f"p has no block of {L} h")
+    block = block_dim(L)
+    q = p.drop_vars(BLOCK_PARAMETERS, errors="ignore")
+    new = {}
+    for name in [n for n in q.data_vars if "hour" in q[n].dims]:
+        da = q[name]
+        if name == "time_step_duration":
+            out = tb.duration[L]
+        elif name in _STEP_SUMS:
+            out = da.groupby(tb.block_of_hour[L]).sum()
+        elif name in _STEP_MEANS:
+            out = block_mean(xr.where(np.isfinite(da), da, 1.0), tb, L)
+        else:
+            raise ValueError(f"{name}: no rule to put a per-hour parameter on steps of {L} h")
+        new[name] = out.rename({block: "hour"})
+    q = q.drop_dims("hour").assign_coords(hour=np.arange(tb.duration[L].size, dtype="int64"))
+    return q.assign(new)
+
+
+FLEXDEM_RAMP = 0.03
+# heat energy that is flexible in area ``a`` in each block (cycled; area ``b`` has 0.8 times): shifted by the
+# window, the ratios and the ramps below (probed: the ratio rows do not bind, the window and both ramps do)
+FLEXDEM_BLOCKS = [6.1, 4.8, 4.0, 5.9, 5.3, 6.7]
+
+
+def coarse_step_dataset(L: int, horizon: int, net_import: bool = False, carbon: bool = False) -> xr.Dataset:
+    """
+    The dataset on which every contributor of every resource has the balance's length (T3(c), I5).
+
+    ``combined_toy`` of ``horizon`` one-hour steps (a multiple of ``L``) with conversion and combined only (no
+    storage, transport or process: their hourly contributors would keep the balances summed, a relaxation and not the
+    reference), ``turpe`` off (R5), the idle resource kept (R10), every conversion and combined length ``L`` (so
+    ``gas`` and ``heat`` are derived at ``L`` and ``idle`` stays hourly), the mean rule on every conversion
+    technology with an availability that varies inside the blocks (``heater``; ``well`` has none), flexdem on heat
+    (``FLEXDEM_BLOCKS``, constant inside each block, next to a fixed demand) with load ratios 0.75 and 1.4, a
+    conservation window of ``2 L`` hours and ramps of 0.03. Every conversion and combined ramp, mode-pair ramp and
+    ``conversion_max_daily_production`` is NaN, and each availability is all-NaN or all-finite (C17,
+    ``check_coarse_step_contract``). ``net_import`` (Task 8) and ``carbon`` (Task 9) are not built yet.
+    ``coarse_step_reference(p, L)`` is the same system in today's code.
+    """
+    if net_import or carbon:
+        raise NotImplementedError("net_import is built in Task 8 and carbon in Task 9")
+    if horizon % L:
+        raise ValueError(f"horizon {horizon} is not a multiple of L = {L}")
+    p = combined_toy([1.0] * horizon)
+    is_heat = p.resource == "heat"
+    blocks = np.resize(FLEXDEM_BLOCKS, horizon // L)
+    flexible = np.zeros((2, horizon, p.sizes["resource"], 1))
+    for area, share in enumerate((1.0, 0.8)):
+        flexible[area, :, list(p.resource.values).index("heat"), 0] = share * np.repeat(blocks, L) / L
+    p = p.assign(
+        turpe=np.array(False),
+        demand=p.demand * xr.where(is_heat, 0.4, 1.0),
+        flexdem=np.array(True),
+        flexdem_demand=(("area", "hour", "resource", "year_op"), flexible),
+    )
+    per = ("area", "resource", "year_op")
+    shape = tuple(p.sizes[d] for d in per)
+    for name, value in (
+        ("flexdem_maxload_ratio", 1.4),
+        ("flexdem_minload_ratio", 0.75),
+        ("flexdem_ramp_up", FLEXDEM_RAMP),
+        ("flexdem_ramp_down", FLEXDEM_RAMP),
+    ):
+        p[name] = (per, np.full(shape, value))
+    p["flexdem_conservation_hrs"] = (per, np.full(shape, 2 * L, dtype="int64"))
+    p = per_tech(p, "conversion_availability", {"heater": np.resize([1.0, 0.6, 0.9, 0.8, 0.5, 1.0, 0.7, 0.9], horizon)})
+    for name in _NO_RAMPS:
+        p[name] = xr.full_like(p[name], np.nan) if name in p else xr.DataArray(np.nan)
+    techs = {t: L for t in p.conversion_tech.values}
+    p = with_blocks(
+        p,
+        conversion=techs,
+        combined={t: L for t in p.combined_tech.values},
+        rule={t: "mean" for t in techs},
+    )
+    check_coarse_step_contract(p)
+    return p
+
+
+def flexdem_block_dataset() -> xr.Dataset:
+    """``coarse_step_dataset(4, 24)``: flexdem on heat with ratios, a window of 8 h and ramps, blocks of 4 h."""
+    return coarse_step_dataset(4, 24)
+
+
+def flexdem_toy(n: int, level: float = 1.0, window: int = 0, ramp: float = 0.1) -> xr.Dataset:
+    """
+    The hand toy with a constant flexible steel demand (``level`` per step) and no fixed demand.
+
+    Load ratios 0.5 and 1.5, ramps ``ramp``, a conservation window of ``window`` hours (0: none). No block length.
+    """
+    p = hand_toy([1.0] * n, [0.0] * n)
+    per, shape = ("area", "resource", "year_op"), (1, 2, 1)
+    demand = np.zeros((1, n, 2, 1))
+    demand[0, :, 1, 0] = level
+    return p.assign(
+        flexdem=np.array(True),
+        flexdem_demand=(("area", "hour", "resource", "year_op"), demand),
+        flexdem_conservation_hrs=(per, np.full(shape, window, dtype="int64")),
+        flexdem_maxload_ratio=(per, np.full(shape, 1.5)),
+        flexdem_minload_ratio=(per, np.full(shape, 0.5)),
+        flexdem_ramp_up=(per, np.full(shape, ramp)),
+        flexdem_ramp_down=(per, np.full(shape, ramp)),
+    )
+
+
+def flexdem_short_block_dataset() -> xr.Dataset:
+    """``flexdem_toy`` of 10 h with the furnace on blocks of 4 h: steel is derived at 4 h, the last block lasts 2 h."""
+    return with_blocks(flexdem_toy(10), conversion={"furnace": 4})
+
+
+def flexdem_ratio_dataset() -> xr.Dataset:
+    """
+    ``flexdem_block_dataset`` with ratios that bind and no ramp: area ``a`` meets the maximum, area ``b`` the minimum.
+
+    The areas are independent, so each one gets the flexible heat energy per block (probed) that pushes it against
+    one of the two limits, with a unique optimum.
+    """
+    p = flexdem_block_dataset()
+    cells = {"a": ([2.3, 9.1, 5.7, 2.9, 8.6, 11.3], 1.43, 0.5), "b": ([4.1, 8.3, 5.0, 9.4, 9.2, 4.2], 3.0, 0.83)}
+    heat = list(p.resource.values).index("heat")
+    demand = p.flexdem_demand.copy(deep=True)
+    for area, (blocks, maximum, minimum) in cells.items():
+        i = list(p.area.values).index(area)
+        demand.values[i, :, heat, 0] = np.repeat(blocks, 4) / 4
+        p["flexdem_maxload_ratio"].values[i] = maximum
+        p["flexdem_minload_ratio"].values[i] = minimum
+    nan = p.flexdem_ramp_up * np.nan
+    return p.assign(flexdem_demand=demand, flexdem_ramp_up=nan, flexdem_ramp_down=nan)
