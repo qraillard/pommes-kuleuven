@@ -50,7 +50,11 @@ CASES = {
 
 
 def read(m) -> xr.Dataset:
-    """The solution of ``m`` as the readers get it: outer-join warning filtered, units unstacked."""
+    """
+    The whole solution of ``m`` as the readers get it: outer-join warning filtered, units unstacked.
+
+    The Dataset counterpart of ``solved`` (which gives one variable, groups dropped).
+    """
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=OUTER_JOIN)
         return m.solution.map(densify_any)
@@ -203,6 +207,25 @@ def test_get_net_generation_includes_coarse_shedding_and_spill():
 
 
 @pytest.mark.parametrize("case", CASES)
+def test_readers_run_on_a_block_model_and_equal_the_twin(case):
+    """The data behind the plots (net generation, conversion or combined power) equals the twin's, without a warning."""
+    make, lengths = CASES[case]
+    p = make()
+    m, twin, s, s_twin = solve_pair(p, **lengths)
+    module = "combined" if "combined" in lengths else "conversion"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # the readers never re-emit the why-hourly warning
+        net = get_net_generation(s, p)
+        power = module_hourly(s, module, "power", p)
+    # a module with only block technologies has no hourly variable
+    assert ("operation_conversion_power" in s) == (case != "conversion_all_block")
+    assert ("operation_combined_power" in s) == (case == "combined_t2")
+    assert abs(power).sum() > 1e-6
+    assert_same(net, get_net_generation(s_twin, hourly_params(p)))
+    assert_same(power, module_hourly(s_twin, module, "power", hourly_params(p)))
+
+
+@pytest.mark.parametrize("case", CASES)
 def test_plots_run_on_a_block_model(case, tmp_path):
     pytest.importorskip("plotly")  # an optional dependency of the plots
     from pommes.common_plots import plot_power
@@ -211,16 +234,10 @@ def test_plots_run_on_a_block_model(case, tmp_path):
     p = make()
     m, twin, s, s_twin = solve_pair(p, **lengths)
     with warnings.catch_warnings():
-        warnings.simplefilter("error")  # the readers never re-emit the why-hourly warning
+        warnings.simplefilter("error")
         fig = plot_power(s, str(tmp_path), parameters=p)
-        net = get_net_generation(s, p)
-        module = "combined" if "combined" in lengths else "conversion"
-        power = module_hourly(s, module, "power", p)
     fig_twin = plot_power(s_twin, str(tmp_path / "twin"), parameters=hourly_params(p))
     assert (tmp_path / "power.html").is_file()
-    # a module with only block technologies has no hourly variable
-    assert ("operation_conversion_power" in s) == (case != "conversion_all_block")
-    assert ("operation_combined_power" in s) == (case == "combined_t2")
 
     def traces(f):
         return {
@@ -233,8 +250,6 @@ def test_plots_run_on_a_block_model(case, tmp_path):
     for tech in want:
         np.testing.assert_allclose(got[tech], want[tech], atol=1e-6, err_msg=tech)
     assert sum(abs(y) for t in got.values() for _, y in t) > 1e-6
-    assert_same(net, get_net_generation(s_twin, hourly_params(p)))
-    assert_same(power, module_hourly(s_twin, module, "power", hourly_params(p)))
 
 
 def test_plot_power_asks_for_the_parameters_of_a_block_solution(tmp_path):
@@ -259,7 +274,9 @@ def test_energy_cost_plot_reads_coarse_shedding_spillage_and_duals():
     p = combined_derived_coarse_dataset()
     m, twin, s, s_twin = solve_pair(p, combined=ALL_COMBINED)
     tb = time_blocks(p, warn=False)
-    shed, spill = shedding_spillage_energy(s, p)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # the readers of the plot never re-emit the why-hourly warning
+        shed, spill = shedding_spillage_energy(s, p)
     for got, name in ((shed, "load_shedding"), (spill, "spillage")):
         block = s[f"operation_{name}_block_2h_power"]
         want = expand_to_hours(tb.duration[2] * block, tb, "energy")  # coarse: D_L x power, spread over the steps
@@ -271,7 +288,9 @@ def test_energy_cost_plot_reads_coarse_shedding_spillage_and_duals():
     # the coarse dual of heat is read with kind="intensive": one value per block, repeated over its steps
     names = ["operation_adequacy_constraint", "operation_adequacy_block_2h_constraint"]
     dual = read_dual_of(m, names)
-    price = adequacy_price(dual, p)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        price = adequacy_price(dual, p)
     assert abs(price.sel(resource="heat")).max() > 1e-6
     heat = expand_to_hours(dual[names[1]], tb, "intensive")
     assert_same(price.sel(resource=["heat"]), heat)

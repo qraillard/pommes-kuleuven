@@ -212,10 +212,7 @@ def get_capacities(
 
 def _group_dim(da: DataArray, module: str) -> str:
     """The dimension along which the groups of a module are outer-joined: its technologies, else the resources."""
-    for dim in (f"{module}_tech", f"{module}_tech_unit"):
-        if dim in da.dims:
-            return dim
-    return "resource"
+    return f"{module}_tech" if f"{module}_tech" in da.dims else "resource"
 
 
 def module_hourly(
