@@ -530,6 +530,21 @@ def test_transport_fuel_counts():
     assert lengths_of(setl(p, "conversion", a=4))["steel"] == 4
 
 
+def test_transport_resource_counts():
+    # carries steel (transport_resource == r), no fuel
+    p = toy(
+        conversion={"a": {"steel": 1.0}}, transport={"truck": ("steel", None)}
+    )
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("always")
+        out = lengths_of(setl(p, "conversion", a=4))
+    assert np.isnan(out["steel"])
+    p = toy(
+        conversion={"a": {"steel": 1.0}}, transport={"truck": ("ore", None)}
+    )
+    assert lengths_of(setl(p, "conversion", a=4))["steel"] == 4
+
+
 def test_factor_tested_on_the_full_grid():
     p = toy(
         conversion={"a": {"steel": 1.0}, "pinned": {"steel": 1.0}},
@@ -594,7 +609,7 @@ def test_r4_nesting_derived():
             "hub": {"ore": 1},
         }
     )
-    with pytest.raises(ValueError, match=r"steel.*6 h.*4 h|steel.*4 h"):
+    with pytest.raises(ValueError, match=r"steel.*6 h.*4 h"):
         time_blocks(setl(p, "conversion", a=6, b=4))
 
 
@@ -725,6 +740,34 @@ def test_refusals_read_only_lengths_in_use():
     )
     q, tb = _flex(10)
     check_block_flexdem(q.assign(flexdem=np.array(False)), tb)
+    # R9: the coarse length belongs to a module that is off
+    off = q.assign(conversion=np.array(False))
+    check_block_flexdem(off, time_blocks(off))
+    # R2: a step crossing a boundary of a length of a module that is off
+    r2 = toy(conversion={"a": {"steel": 1.0}, "hub": {"ore": 1}}, hours=2)
+    r2["time_step_duration"][:] = [1.0, 2.0]
+    r2 = setl(r2, "conversion", a=2)
+    with pytest.raises(ValueError, match="crosses a block boundary"):
+        time_blocks(r2)
+    time_blocks(r2.assign(conversion=np.array(False)))
+
+
+def test_t0_path_reads_no_input():
+    p = toy(conversion={"hub": {"ore": 1}}, hours=2)
+    tb = time_blocks(p)
+    assert not tb.active
+    # inputs the checks would read are inconsistent, yet nothing is raised
+    check_block_daily_cap(p.assign(conversion_max_daily_production=1), tb)
+    check_block_flexdem(p.assign(flexdem=np.array(True)), tb)
+
+
+def test_r9_nan_or_absent_offset_reads_as_zero():
+    p, tb = _flex(8, offset=np.nan)
+    check_block_flexdem(p, tb)
+    check_block_flexdem(p.drop_vars("flexdem_window_offset_hrs"), tb)
+    # the offset is checked only for a coarse balance with an active flexdem
+    p, tb = _flex(8, offset=2.0, demand=0.0)
+    check_block_flexdem(p, tb)
 
 
 def test_block_mean():
@@ -733,6 +776,16 @@ def test_block_mean():
     tb = time_blocks(setl(p, "conversion", a=4))
     x = xr.DataArray([1.0, 10.0], dims="hour", coords={"hour": [0, 1]})
     assert block_mean(x, tb, 4).item() == pytest.approx(7.75)
+    # unequal blocks: steps 1,3 | 2,2 | 1 (last block shorter), L = 4
+    q = toy(conversion={"a": {"steel": 1.0}, "hub": {"ore": 1}}, hours=5)
+    q["time_step_duration"][:] = [1.0, 3.0, 2.0, 2.0, 1.0]
+    tq = time_blocks(setl(q, "conversion", a=4))
+    y = xr.DataArray(
+        [1.0, 10.0, 2.0, 6.0, 5.0], dims="hour", coords={"hour": range(5)}
+    )
+    got = block_mean(y, tq, 4)
+    # (1*1+3*10)/4, (2*2+2*6)/4, 5
+    assert got.values == pytest.approx([7.75, 4.0, 5.0])
     c = xr.DataArray(3.0)
     assert block_mean(c, tb, 4) is c
     nan = xr.DataArray([1.0, np.nan], dims="hour", coords={"hour": [0, 1]})

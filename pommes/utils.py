@@ -773,9 +773,14 @@ def time_blocks(p: Dataset) -> TimeBlocks:
     Blocks are anchored at the first step: ``start = cumsum(dt) - dt`` and
     ``block = floor((start + 1e-9) / L)``; the last block may be shorter.
     Raises ``ValueError`` for R1 (length not a positive whole number), R2
-    (a step crossing a block boundary), R3 (a non-positive or non-finite step)
-    and R8 (unknown availability rule). Call it on the full input dataset,
-    before ``to_sparse_units``.
+    (a step crossing a block boundary), R3 (a non-positive or non-finite step),
+    R4 (a technology block length that does not divide a forced balance
+    length, or derived lengths that do not nest), R5 (a coarse electricity
+    balance with TURPE), R8 (unknown availability rule) and R10 (every
+    balance coarse). Warns (``UserWarning``) why a balance stays hourly when
+    some length is in use. The result carries ``step``, the
+    ``time_step_duration`` that ``block_mean`` weights by. Call it on the
+    full input dataset, before ``to_sparse_units``.
     """
     conversion_block_rule(p)  # R8
     tech_length = {
@@ -920,7 +925,7 @@ def _derive_balance_lengths(p: Dataset, tech_length: dict, forced: DataArray):
 
 def check_block_daily_cap(p: Dataset, tb: TimeBlocks) -> None:
     """R6: a block length must nest with the day when a daily cap is set."""
-    if "conversion_max_daily_production" not in p:
+    if not tb.active or "conversion_max_daily_production" not in p:
         return
     d = (
         int(p["operation_day_duration"])
@@ -950,7 +955,7 @@ def check_block_daily_cap(p: Dataset, tb: TimeBlocks) -> None:
 
 def check_block_flexdem(p: Dataset, tb: TimeBlocks) -> None:
     """R9: flexdem windows and offset must be unions of the balance blocks."""
-    if not (_on(p, "flexdem") and "flexdem_demand" in p):
+    if not (tb.active and _on(p, "flexdem") and "flexdem_demand" in p):
         return
     fd = p["flexdem_demand"] != 0
     hrs = (
@@ -963,6 +968,7 @@ def check_block_flexdem(p: Dataset, tb: TimeBlocks) -> None:
         if "flexdem_window_offset_hrs" in p
         else 0.0
     )
+    offset = 0.0 if np.isnan(offset) else offset  # NaN reads as 0 (flexdem.py)
     for r in tb.resource_length["resource"].values:
         L = tb.resource_length.sel(resource=r).item()
         if not np.isfinite(L):
