@@ -5,11 +5,14 @@ from linopy import Constraint, Model
 from xarray import Dataset
 
 from pommes.utils import (
+    TimeBlocks,
+    add_to_balances,
     annual_mask,
     annual_quantity,
     condition_coords,
     condition_mask,
     expected_over_conditions,
+    time_blocks,
 )
 
 
@@ -19,6 +22,7 @@ def add_net_import(
     annualised_totex_def: Constraint,
     operation_year_normalization: float,
     operation_adequacy_constraint: Constraint,
+    tb: TimeBlocks | None = None,
 ) -> Model:
     """
     Add energy net import components to the Linopy model.
@@ -95,6 +99,7 @@ def add_net_import(
         import/export costs dynamically within the model. The model is enhanced
         to accurately capture net import behavior and cost implications.
     """
+    tb = time_blocks(model_parameters) if tb is None else tb
     m = model
     p = model_parameters
 
@@ -155,7 +160,9 @@ def add_net_import(
 
     # Adequacy constraint
 
-    operation_adequacy_constraint.lhs += operation_net_import_net_generation
+    add_to_balances(
+        operation_adequacy_constraint, operation_net_import_net_generation, tb
+    )
 
     # Operation - Imports & exports
 

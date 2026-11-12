@@ -7,9 +7,12 @@ from xarray import Dataset
 
 from pommes.model.annuity import annuity_full_life, full_life_window
 from pommes.utils import (
+    TimeBlocks,
+    add_to_balances,
     condition_coords,
     condition_mask,
     expected_over_conditions,
+    time_blocks,
 )
 
 
@@ -18,6 +21,7 @@ def add_transport(
     model_parameters: Dataset,
     annualised_totex_def: Constraint,
     operation_adequacy_constraint: Constraint,
+    tb: TimeBlocks | None = None,
 ) -> Model:
     """
     Add transport-related components to the Linopy model.
@@ -149,6 +153,7 @@ def add_transport(
         technical and economic limits, allowing the model to simulate energy
         transport flows realistically.
     """
+    tb = time_blocks(model_parameters) if tb is None else tb
     m = model
     p = model_parameters
 
@@ -311,8 +316,10 @@ def add_transport(
 
     # Adequacy constraint
 
-    operation_adequacy_constraint.lhs += (
-        operation_transport_net_generation.sum("transport_tech")
+    add_to_balances(
+        operation_adequacy_constraint,
+        operation_transport_net_generation.sum("transport_tech"),
+        tb,
     )
 
     # Fuel burnt by the link (e.g. ship bunker fuel), in proportion to the
@@ -335,7 +342,7 @@ def add_transport(
             .where(p.resource == p.transport_fuel_resource)
             .sum(["link", "transport_tech"])
         )
-        operation_adequacy_constraint.lhs -= fuel_drawn
+        add_to_balances(operation_adequacy_constraint, -fuel_drawn, tb)
 
     # Operation - transport
 

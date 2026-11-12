@@ -66,7 +66,7 @@ def _to_steps(ds, step):
     return out
 
 
-def _add_flexdem_master(model, model_parameters, annualised_totex_def, operation_adequacy_constraint):
+def _add_flexdem_master(model, model_parameters, annualised_totex_def, operation_adequacy_constraint, tb=None):
     """Reference: the conservation part of flexdem.py as on master (one constraint per window)."""
     m, p = model, model_parameters
     flexdem_demand = p.flexdem_demand

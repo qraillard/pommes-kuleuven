@@ -9,9 +9,12 @@ from xarray import Dataset
 
 from pommes.model.annuity import annuity_full_life, full_life_window
 from pommes.utils import (
+    TimeBlocks,
+    add_to_balances,
     condition_coords,
     condition_mask,
     expected_over_conditions,
+    time_blocks,
 )
 
 
@@ -20,6 +23,7 @@ def add_storage(
     model_parameters: Dataset,
     annualised_totex_def: Constraint,
     operation_adequacy_constraint: Constraint,
+    tb: TimeBlocks | None = None,
 ) -> Model:
     """
     Add storage-related components to the Linopy model.
@@ -134,6 +138,7 @@ def add_storage(
         and within their technical and economic limits, allowing the model to
         simulate energy storage behavior realistically.
     """
+    tb = time_blocks(model_parameters) if tb is None else tb
     m = model
     p = model_parameters
 
@@ -261,8 +266,10 @@ def add_storage(
 
     # Adequacy constraint
 
-    operation_adequacy_constraint.lhs += operation_storage_net_generation.sum(
-        "storage_tech"
+    add_to_balances(
+        operation_adequacy_constraint,
+        operation_storage_net_generation.sum("storage_tech"),
+        tb,
     )
 
     # Operation - Storage

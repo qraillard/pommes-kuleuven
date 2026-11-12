@@ -5,7 +5,13 @@ import xarray as xr
 from linopy import Constraint, Model
 from xarray import Dataset
 
-from pommes.utils import condition_coords, condition_mask
+from pommes.utils import (
+    TimeBlocks,
+    add_to_balances,
+    condition_coords,
+    condition_mask,
+    time_blocks,
+)
 
 
 def add_flexdem(
@@ -13,7 +19,9 @@ def add_flexdem(
     model_parameters: Dataset,
     annualised_totex_def: Constraint,
     operation_adequacy_constraint: Constraint,
+    tb: TimeBlocks | None = None,
 ) -> Model:
+    tb = time_blocks(model_parameters) if tb is None else tb
     m = model
     p = model_parameters
 
@@ -45,7 +53,7 @@ def add_flexdem(
 
     # Adequacy constraint
 
-    operation_adequacy_constraint.lhs += -operation_flexdem_demand
+    add_to_balances(operation_adequacy_constraint, -operation_flexdem_demand, tb)
 
     # Ratio constraints
 

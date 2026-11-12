@@ -10,9 +10,12 @@ from xarray import Dataset
 
 from pommes.model.annuity import annuity_full_life, full_life_window
 from pommes.utils import (
+    TimeBlocks,
+    add_to_balances,
     condition_coords,
     condition_mask,
     expected_over_conditions,
+    time_blocks,
 )
 
 
@@ -22,6 +25,7 @@ def add_process(
     annualised_totex_def: Constraint,
     operation_year_normalization: float,
     operation_adequacy_constraint: Constraint,
+    tb: TimeBlocks | None = None,
 ) -> Model:
     """
     Add process-related components to the Linopy model.
@@ -141,6 +145,7 @@ def add_process(
         capabilities, and power output limits. The model is thereby enhanced
         to accurately simulate process energy behavior and costs.
     """
+    tb = time_blocks(model_parameters) if tb is None else tb
     m = model
     p = model_parameters
 
@@ -315,8 +320,10 @@ def add_process(
 
     # Adequacy constraint
 
-    operation_adequacy_constraint.lhs += operation_process_net_generation.sum(
-        "process_tech"
+    add_to_balances(
+        operation_adequacy_constraint,
+        operation_process_net_generation.sum("process_tech"),
+        tb,
     )
 
     # Operation - process

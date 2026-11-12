@@ -7,11 +7,14 @@ from xarray import Dataset
 
 from pommes.model.annuity import annuity_full_life, full_life_window
 from pommes.utils import (
+    TimeBlocks,
+    add_to_balances,
     annual_mask,
     annual_quantity,
     condition_coords,
     condition_mask,
     expected_over_conditions,
+    time_blocks,
 )
 
 
@@ -21,6 +24,7 @@ def add_conversion(
     annualised_totex_def: Constraint,
     operation_year_normalization: float,
     operation_adequacy_constraint: Constraint,
+    tb: TimeBlocks | None = None,
 ) -> Model:
     """
     Add conversion-related components to the Linopy model.
@@ -184,6 +188,7 @@ def add_conversion(
         The model is thereby enhanced to accurately simulate
         energy conversion behavior and costs.
     """
+    tb = time_blocks(model_parameters) if tb is None else tb
     m = model
     p = model_parameters
 
@@ -268,8 +273,10 @@ def add_conversion(
 
     # Adequacy constraint
 
-    operation_adequacy_constraint.lhs += (
-        operation_conversion_net_generation.sum("conversion_tech")
+    add_to_balances(
+        operation_adequacy_constraint,
+        operation_conversion_net_generation.sum("conversion_tech"),
+        tb,
     )
 
     # Operation - Conversion

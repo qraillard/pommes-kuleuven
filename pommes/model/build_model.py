@@ -23,6 +23,7 @@ from pommes.utils import (
     condition_coords,
     condition_mask,
     expected_over_conditions,
+    time_blocks,
 )
 
 
@@ -95,6 +96,7 @@ def build_model(model_parameters: Dataset) -> Model:
         module ensures data consistency.
     """
     p = model_parameters
+    tb = time_blocks(p)
 
     operation_year_normalization = (
         p.operation_year_duration / p.time_step_duration.sum("hour")
@@ -248,6 +250,7 @@ def build_model(model_parameters: Dataset) -> Model:
             annualised_totex_def,
             operation_year_normalization,
             operation_adequacy_constraint,
+            tb=tb,
         )
 
     if "retrofit_conversion" in p.keys() and p.retrofit_conversion:
@@ -255,7 +258,8 @@ def build_model(model_parameters: Dataset) -> Model:
 
     if "storage" in p.keys() and p.storage:
         m = add_storage(
-            m, p, annualised_totex_def, operation_adequacy_constraint
+            m, p, annualised_totex_def, operation_adequacy_constraint,
+            tb=tb,
         )
 
     if "retrofit_storage" in p.keys() and p.retrofit_storage:
@@ -263,7 +267,8 @@ def build_model(model_parameters: Dataset) -> Model:
 
     if "transport" in p.keys() and p.transport:
         m = add_transport(
-            m, p, annualised_totex_def, operation_adequacy_constraint
+            m, p, annualised_totex_def, operation_adequacy_constraint,
+            tb=tb,
         )
 
     if "retrofit_transport" in p.keys() and p.retrofit_transport:
@@ -276,6 +281,7 @@ def build_model(model_parameters: Dataset) -> Model:
             annualised_totex_def,
             operation_year_normalization,
             operation_adequacy_constraint,
+            tb=tb,
         )
 
     if "retrofit_combined" in p.keys() and p.retrofit_combined:
@@ -288,11 +294,13 @@ def build_model(model_parameters: Dataset) -> Model:
             annualised_totex_def,
             operation_year_normalization,
             operation_adequacy_constraint,
+            tb=tb,
         )
 
     if "flexdem" in p.keys() and p.flexdem:
         m = add_flexdem(
-            m, p, annualised_totex_def, operation_adequacy_constraint
+            m, p, annualised_totex_def, operation_adequacy_constraint,
+            tb=tb,
         )
 
     if "net_import" in p.keys() and p.net_import:
@@ -302,11 +310,13 @@ def build_model(model_parameters: Dataset) -> Model:
             annualised_totex_def,
             operation_year_normalization,
             operation_adequacy_constraint,
+            tb=tb,
         )
 
     if "carbon" in p.keys() and p.carbon:
         m = add_carbon(
-            m, p, annualised_totex_def, operation_year_normalization
+            m, p, annualised_totex_def, operation_year_normalization,
+            tb=tb,
         )
 
     if "turpe" in p.keys() and p.turpe:

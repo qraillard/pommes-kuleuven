@@ -6,6 +6,7 @@ from linopy import Constraint, Model
 from xarray import Dataset
 
 from pommes.utils import (
+    TimeBlocks,
     annual_mask,
     annual_quantity,
     condition_coords,
@@ -19,6 +20,7 @@ def add_carbon(
     model_parameters: Dataset,
     annualised_totex_def: Constraint,
     operation_year_normalization: float,
+    tb: TimeBlocks | None = None,
 ) -> Model:
     """
     Add carbon-related components to the Linopy model.

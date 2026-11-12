@@ -997,3 +997,96 @@ def block_mean(x: DataArray, tb: TimeBlocks, L: int) -> DataArray:
         return x
     total = (tb.step * x).groupby(tb.block_of_hour[L]).sum(skipna=False)
     return total / tb.duration[L]
+
+
+def _check_group(group: DataArray, T_L: str | None) -> None:
+    """H3: a groupby array is 1-D over ``hour`` or the block dimension."""
+    assert group.ndim == 1 and group.dims in {("hour",), (T_L,)}, (
+        group.dims
+    )
+
+
+def change_resolution(expr, tb: TimeBlocks, src: int | None, dst: int | None):
+    """
+    Energy-per-step expression from resolution ``src`` to ``dst`` (section 7.1).
+
+    ``None`` is hourly, ``L`` the blocks of ``L`` hours. Same resolution:
+    ``expr`` itself. Hourly to blocks and finer to coarser blocks sum; blocks
+    to hourly and coarser to finer blocks broadcast the duration share.
+    """
+    if src == dst:
+        return expr
+    if src is None:
+        group = tb.block_of_hour[dst]
+        _check_group(group, None)
+        out = expr.groupby(group).sum()
+    elif dst is not None and dst > src:  # coarser row: sum its blocks
+        group = (
+            tb.block_of_hour[dst]
+            .sel(hour=tb.first_hour[src])
+            .drop_vars("hour")
+        )
+        _check_group(group, block_dim(src))
+        out = expr.groupby(group).sum()
+    else:  # hourly or finer row: broadcast the share of the source block
+        t_src = block_dim(src)
+        if dst is None:
+            idx, row_duration = tb.block_of_hour[src], tb.step
+        else:
+            idx = (
+                tb.block_of_hour[src]
+                .sel(hour=tb.first_hour[dst])
+                .drop_vars("hour")
+            )
+            row_duration = tb.duration[dst]
+        _check_group(idx, "hour" if dst is None else block_dim(dst))
+        w = (
+            row_duration
+            / tb.duration[src].isel({t_src: idx}).drop_vars(t_src)
+        )
+        out = expr.isel({t_src: idx}).drop_vars(t_src) * w
+    levels = {
+        n
+        for i in out.indexes.values()
+        if isinstance(i, pd.MultiIndex)
+        for n in i.names
+    }
+    assert set(out.coords) <= set(out.dims) | levels, set(out.coords)
+    return out
+
+
+def add_to_balances(adequacy, expr, tb: TimeBlocks, src: int | None = None) -> None:
+    """
+    Add ``expr`` to the adequacy constraint of every resource it holds.
+
+    Each resource goes to the balance of its length (hourly: ``adequacy``),
+    converted from ``src`` by ``change_resolution`` and joined by label.
+    Without blocks it is today's ``adequacy.lhs += expr``.
+    """
+    if not tb.active:
+        adequacy.lhs += expr
+        return
+    routed = []
+    for dst in [None, *tb.balance_lengths]:
+        res = [r for r in tb.resources(dst) if r in expr.indexes["resource"]]
+        if not res:
+            continue
+        routed += res
+        part = change_resolution(expr.sel(resource=res), tb, src, dst)
+        con = (
+            adequacy
+            if dst is None
+            else adequacy.model.constraints[
+                f"operation_adequacy_block_{dst}h_constraint"
+            ]
+        )
+        for d in set(part.dims) & set(con.lhs.dims) - {"_term"}:
+            # a left join would drop extra labels silently
+            assert part.indexes[d].isin(con.lhs.indexes[d]).all(), (
+                con.name,
+                d,
+            )
+        con.lhs = con.lhs.add(part, join="left")  # by label, never position
+    assert sorted(routed) == sorted(
+        expr.indexes["resource"]
+    ), "resource not routed exactly once"
