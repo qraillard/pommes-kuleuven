@@ -1,6 +1,7 @@
 """Module with function to save solution in netcdf and-or CSV files."""
 
 import os
+import warnings
 
 import linopy as lp
 import pandas as pd
@@ -85,8 +86,15 @@ def save_solution(
             # ) as outfile:
             #     yaml.dump(not_df, outfile)
 
-    model.constraints.dual.to_netcdf(f"{output_folder}/dual.nc",engine="h5netcdf")
-    model.solution.to_netcdf(f"{output_folder}/solution.nc")
+    with warnings.catch_warnings():
+        # the groups of a block model (time blocks) are outer-joined: expected
+        warnings.filterwarnings(
+            "ignore", message="Coordinates across variables not equal"
+        )
+        model.constraints.dual.to_netcdf(
+            f"{output_folder}/dual.nc", engine="h5netcdf"
+        )
+        model.solution.to_netcdf(f"{output_folder}/solution.nc")
     # obj = pd.Series(dict(objective=model.objective.value))
     # obj.to_csv(f"{output_folder}/objective.csv", sep=";")
 

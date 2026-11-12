@@ -179,12 +179,12 @@ def hand_toy(
     return ds
 
 
-def _net_import_dataset(dt, resources, demand, price, factor=None) -> xr.Dataset:
+def _net_import_dataset(dt, resources, demand, price, factor=None, total_factor=None) -> xr.Dataset:
     """
     net_import only, no conversion technology: one area, one ``year_op``, ``idle`` first.
 
-    ``demand``, ``price`` (import) and ``factor`` map a resource to its per-step list (a
-    number for ``factor`` is the same at every step); every other value is 0, and ``idle``
+    ``demand``, ``price`` (import), ``factor`` and ``total_factor`` (the total emission factor, ``factor`` when
+    not given) map a resource to its per-step list (a number is the same at every step); every other value is 0, and ``idle``
     imports at price 1 (it holds nothing, R10). Export price 0, shedding and spillage capped at 0.
     """
     from pommes.model.data_validation import ref_inputs
@@ -209,7 +209,7 @@ def _net_import_dataset(dt, resources, demand, price, factor=None) -> xr.Dataset
         ("demand", demand),
         ("net_import_import_price", {"idle": 1.0, **price}),
         ("net_import_emission_factor", factor or {}),
-        ("net_import_total_emission_factor", factor or {}),
+        ("net_import_total_emission_factor", total_factor or factor or {}),
     ):
         x = np.zeros((1, n, len(names), 1))
         for resource, value in values.items():
@@ -231,6 +231,7 @@ def net_import_toy(
     demand: list[float],
     price: list[float],
     factor: float | list[float] = 0.0,
+    total_factor: float | list[float] | None = None,
 ) -> xr.Dataset:
     """
     The net_import toy of section 16.2: steel comes from the rest of the world only.
@@ -238,11 +239,17 @@ def net_import_toy(
     One area, one ``year_op``, resources ``idle`` and ``steel``, **no conversion
     technology**. Steel demand ``demand`` (energy per step) over the steps ``dt``,
     import price ``price`` (per step, MWh), export price 0, emission factor
-    ``factor`` (a number or one per step); shedding and spillage capped at 0.
+    ``factor`` (a number or one per step) and total emission factor ``total_factor`` (default: ``factor``; give
+    another one to tell the two apart); shedding and spillage capped at 0.
     The objective is exactly ``n * sum(price_h * import_h)`` with ``n = toy_n(p)``.
     """
     return _net_import_dataset(
-        dt, ["steel"], {"steel": demand}, {"steel": price}, {"steel": factor}
+        dt,
+        ["steel"],
+        {"steel": demand},
+        {"steel": price},
+        {"steel": factor},
+        None if total_factor is None else {"steel": total_factor},
     )
 
 
@@ -464,6 +471,12 @@ def combined_t2_dataset() -> xr.Dataset:
     return with_blocks(combined_toy([1.0] * 10), combined={"boiler_block": 2})
 
 
+def combined_all_block_dataset() -> xr.Dataset:
+    """``combined_toy`` on 10 h with every combined technology on 2 h blocks (no hourly combined variable), no carbon."""
+    p = combined_toy([1.0] * 10)
+    return with_blocks(p, combined={t: 2 for t in p.combined_tech.values})
+
+
 def pinned_module_dataset(module: str) -> xr.Dataset:
     """
     ``combined_toy`` whose ``module`` is pinned to zero capacity (section 16.9).
@@ -511,6 +524,14 @@ def with_carbon(p: xr.Dataset, conversion=None, combined=None, tax=None, goal=No
 CARBON_KILNS = {"well": 0.1, "backup": 0.9, "kiln_a": 0.3, "kiln_b": 0.5, "kiln_c": 0.2, "kiln_d": 0.4}
 CARBON_BOILERS = {"electric_boiler": [0.1, 0.1], "boiler_block": [0.5, 0.2], "steady_kiln": [0.3, 0.3]}
 CARBON_HEATER = {"well": 0.3, "heater": 0.8}
+
+
+CARBON_TAX_15 = 15.0
+
+
+def taxed(p: xr.Dataset) -> xr.Dataset:
+    """``p`` with a carbon tax of ``CARBON_TAX_15`` per tCO2."""
+    return p.assign(carbon_tax=np.array(CARBON_TAX_15))
 
 
 def conversion_carbon_dataset() -> xr.Dataset:
@@ -817,6 +838,28 @@ def conversion_t2b_dataset() -> xr.Dataset:
     return with_blocks(
         _t2_base(STEP_10H), conversion={t: 4 for t in KILNS}, rule={"kiln_a": "mean"}
     )
+
+
+def conversion_all_block_dataset() -> xr.Dataset:
+    """
+    ``conversion_t2_dataset`` with every technology on blocks of 4 h (the typical industrial case, M12).
+
+    There is no hourly conversion variable; gas and steel are derived at 4 h, ``idle`` stays hourly. The steel
+    demand is constant inside each block (the blocks hold the steps (0, 1, 2), (3, 4, 5) and (6, 7)), so that the
+    hourly balance of the flat twin has the same optimum as the block rows.
+    """
+    p = _t2_base(STEP_10H)
+    energy = np.repeat([2.0, 3.0, 4.0], [3, 3, 2]) * p.time_step_duration.values
+    demand = np.zeros(p.demand.shape)
+    steel = list(p.resource.values).index("steel")
+    demand[0, :, steel, 0], demand[1, :, steel, 0] = energy, 0.8 * energy
+    p = p.assign(demand=(p.demand.dims, demand))
+    return with_blocks(p, conversion={t: 4 for t in p.conversion_tech.values})
+
+
+def conversion_two_lengths_dataset() -> xr.Dataset:
+    """``conversion_t2_dataset`` with ``kiln_a`` and ``kiln_b`` on blocks of 4 h, ``kiln_c`` and ``kiln_d`` on 2 h."""
+    return with_blocks(_t2_base(STEP_10H), conversion={"kiln_a": 4, "kiln_b": 4, "kiln_c": 2, "kiln_d": 2})
 
 
 def must_run_relaxation_dataset() -> xr.Dataset:

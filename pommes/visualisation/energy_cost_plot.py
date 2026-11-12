@@ -8,7 +8,34 @@ import xarray as xr
 from pommes import (
     generate_summary_dataframes_from_results,
 )
+from pommes.post_process import module_hourly
 from pommes.utils import OPERATING_CONDITION
+
+
+def shedding_spillage_energy(
+    solution: xr.Dataset, parameters: xr.Dataset
+) -> tuple[xr.DataArray, xr.DataArray]:
+    """
+    Energy per step shed and spilled, on the hours (power x step duration).
+
+    A coarse resource has block variables (time blocks): the power of a block
+    is repeated over its steps, so that the energy of a block is its duration
+    times its power.
+
+    Returns:
+        tuple: the load shedding and the spillage energies.
+    """
+    shed = module_hourly(solution, "load_shedding", "power", parameters)
+    spill = module_hourly(solution, "spillage", "power", parameters)
+    return (
+        (shed * parameters.time_step_duration).rename("operation_load_shedding"),
+        (spill * parameters.time_step_duration).rename("operation_spillage"),
+    )
+
+
+def adequacy_price(dual: xr.Dataset, parameters: xr.Dataset) -> xr.DataArray:
+    """Dual of the adequacy constraint on the hours: a coarse balance's dual repeated over its steps."""
+    return module_hourly(dual, "adequacy", "constraint", parameters)
 
 
 def plot_energy_cost(
@@ -151,7 +178,8 @@ def plot_energy_cost(
         .sum()
     )
     conso_other_resource["resource_price"] = (
-        dual.operation_adequacy_constraint.sel(
+        adequacy_price(dual, parameters)
+        .sel(
             {
                 key: value
                 for key, value in selection.items()
@@ -200,12 +228,7 @@ def plot_energy_cost(
     )
 
     # Load shedding and spillage are powers: energy per step = time_step_duration x power
-    shed_energy = (
-        solution.operation_load_shedding_power * parameters.time_step_duration
-    ).rename("operation_load_shedding")
-    spill_energy = (
-        solution.operation_spillage_power * parameters.time_step_duration
-    ).rename("operation_spillage")
+    shed_energy, spill_energy = shedding_spillage_energy(solution, parameters)
     load_shedding = (
         shed_energy.sel(
             {

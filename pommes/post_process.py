@@ -15,11 +15,14 @@ Functions:
         Calculate and return the costs (operation and planning) for various assets.
 """
 
+import re
 from typing import TypeVar
 
 import numpy as np
 import xarray as xr
 from xarray import DataArray, Dataset
+
+from pommes.utils import expand_to_hours, time_blocks
 
 XarrayObject = TypeVar("XarrayObject", xr.DataArray, xr.Dataset)
 
@@ -207,6 +210,56 @@ def get_capacities(
     return da
 
 
+def _group_dim(da: DataArray, module: str) -> str:
+    """The dimension along which the groups of a module are outer-joined: its technologies, else the resources."""
+    for dim in (f"{module}_tech", f"{module}_tech_unit"):
+        if dim in da.dims:
+            return dim
+    return "resource"
+
+
+def module_hourly(
+    solution: Dataset, module: str, stem: str, params: Dataset
+) -> DataArray | None:
+    """
+    ``operation_<module>_<stem>`` of a solution on the hours, block groups included (section 11.3).
+
+    The hourly variable (if the module has hourly technologies) and ``expand_to_hours`` of each
+    ``operation_<module>_block_{L}h_<stem>`` (kind ``"energy"`` for ``net_generation``, else
+    ``"intensive"``: powers, duals), combined by label. ``m.solution`` outer-joins the groups, so each
+    group's all-NaN slices are dropped before they are added with 0 for a missing label. Without block
+    variables it is the hourly variable itself. ``None`` if the solution has neither (the module is off).
+    ``params`` (the input dataset) gives the block maps; the solution must be dense (units unstacked).
+    """
+    hourly = f"operation_{module}_{stem}"
+    blocks = sorted(
+        (int(m.group(1)), name)
+        for name in solution.data_vars
+        if (m := re.fullmatch(rf"operation_{module}_block_(\d+)h_{stem}", str(name)))
+    )
+    if not blocks:
+        return solution[hourly] if hourly in solution else None
+    if params is None:
+        raise ValueError(f"{hourly}: the solution has block variables, the input dataset (params) is required")
+    tb = time_blocks(params, warn=False)
+    kind = "energy" if stem == "net_generation" else "intensive"
+    parts = [solution[hourly]] if hourly in solution else []
+    parts += [expand_to_hours(solution[name], tb, kind) for _, name in blocks]
+    dim = _group_dim(parts[0], module)
+    out = None
+    for part in parts:
+        part = part.dropna(dim, how="all")
+        if out is None:
+            out = part
+        else:
+            out, part = xr.align(out, part, join="outer", fill_value=0)
+            out = out + part
+    if dim in params.coords:  # the union is sorted: back to the order of the inputs
+        order = [x for x in params[dim].values if x in set(out[dim].values)]
+        out = out.sel({dim: order})
+    return out.rename(hourly)
+
+
 def get_net_generation(
     solution: Dataset, model_parameters: Dataset
 ) -> xr.DataArray:
@@ -233,32 +286,41 @@ def get_net_generation(
 
     demand = (-1 * p.demand).expand_dims(category=["demand"])
     # Load shedding and spillage are powers: energy per step = time_step_duration x power
-    # (as the net generations and the demand, which are energies per step).
+    # (as the net generations and the demand, which are energies per step). On a coarse resource the
+    # power is that of a block: repeated over its steps, the energy of a block is D_L x power.
     load_shedding = (
-        p.time_step_duration * s.operation_load_shedding_power
+        p.time_step_duration * module_hourly(s, "load_shedding", "power", p)
     ).expand_dims(category=["load_shedding"])
     spillage = (
-        -1 * p.time_step_duration * s.operation_spillage_power
+        -1 * p.time_step_duration * module_hourly(s, "spillage", "power", p)
     ).expand_dims(category=["spillage"])
-    conversion = s.operation_conversion_net_generation.rename(
-        dict(conversion_tech="category")
-    )
+    conversion = module_hourly(s, "conversion", "net_generation", p)
+    if conversion is not None:
+        conversion = conversion.rename(dict(conversion_tech="category"))
+    else:
+        conversion = xr.DataArray([], coords=dict(category=[]))
     combined = xr.DataArray([], coords=dict(category=[]))
     storage = xr.DataArray([], coords=dict(category=[]))
     net_import = xr.DataArray([], coords=dict(category=[]))
     transport = xr.DataArray([], coords=dict(category=[]))
 
     if "combined" in p.keys() and p.combined.any():
-        combined = s.operation_combined_net_generation.rename(
-            dict(combined_tech="category")
+        combined = module_hourly(s, "combined", "net_generation", p)
+        combined = (
+            combined.rename(dict(combined_tech="category"))
+            if combined is not None
+            else xr.DataArray([], coords=dict(category=[]))
         )
     if "storage" in p.keys() and p.storage.any():
         storage = s.operation_storage_net_generation.rename(
             dict(storage_tech="category")
         )
     if "net_import" in p.keys() and p.net_import.any():
-        net_import = s.operation_net_import_net_generation.expand_dims(
-            category=["net_import"]
+        net_import = module_hourly(s, "net_import", "net_generation", p)
+        net_import = (
+            net_import.expand_dims(category=["net_import"])
+            if net_import is not None
+            else xr.DataArray([], coords=dict(category=[]))
         )
     if "transport" in p.keys() and p.transport.any():
         transport = s.operation_transport_net_generation.rename(

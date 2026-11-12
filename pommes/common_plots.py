@@ -14,7 +14,7 @@ from plotly.graph_objs import Figure
 from plotly.subplots import make_subplots
 from xarray import Dataset
 
-from pommes.post_process import get_net_generation
+from pommes.post_process import get_net_generation, module_hourly
 from pommes.utils import array_to_datetime, get_main_resource
 
 
@@ -55,7 +55,10 @@ def save_plot(
 
 
 def plot_power(
-    model_solution: Dataset, plot_folder: str, plot_name: str = "power"
+    model_solution: Dataset,
+    plot_folder: str,
+    plot_name: str = "power",
+    parameters: Dataset | None = None,
 ) -> go.Figure:
     """
     Create a stacked power generation plot.
@@ -64,12 +67,26 @@ def plot_power(
         model_solution (Dataset): Simulation results.
         plot_folder (str): Folder where the plot HTML will be saved.
         plot_name (str, optional): Name of the plot file. Defaults to "power".
+        parameters (Dataset | None, optional): Model input parameters. Required
+            when the solution has block variables (time blocks): their power is
+            repeated over the steps of each block. Defaults to None.
 
     Returns:
         go.Figure: Plotly figure object.
     """
+    if parameters is None and any(
+        str(name).startswith("operation_conversion_block_")
+        for name in model_solution.data_vars
+    ):
+        raise ValueError(
+            "plot_power: the solution has block variables, pass the model "
+            "input dataset as `parameters`."
+        )
+    power = module_hourly(model_solution, "conversion", "power", parameters)
+    if power is None:
+        raise ValueError("plot_power: the solution has no conversion power.")
     fig = px.line(
-        data_frame=model_solution.operation_conversion_power.to_series().reset_index(),
+        data_frame=power.to_series().reset_index(),
         x="hour",
         y="operation_conversion_power",
         color="conversion_tech",

@@ -9,7 +9,9 @@ from pommes.model.combined import combined_groups
 from pommes.model.conversion import conversion_groups
 from pommes.tests.time_blocks_helper import (
     CARBON_BOILERS,
+    CARBON_HEATER,
     CARBON_KILNS,
+    KILNS,
     assert_twin_equal,
     coarse_step_dataset,
     coarse_step_reference,
@@ -17,27 +19,25 @@ from pommes.tests.time_blocks_helper import (
     combined_carbon_dataset,
     combined_toy,
     conversion_carbon_dataset,
+    conversion_toy,
     flat_twin,
     net_import_toy,
     solve_model,
     solved,
+    taxed,
     toy_n,
     with_blocks,
     with_carbon,
 )
+from pommes.tests.conditions_helper import with_conditions
 from pommes.utils import time_blocks
 
 EMISSIONS = "operation_carbon_emissions"
-TAX = 15.0
 # the builder of each case and the block lengths its flat twin repeats
 CASES = {
     "conversion": (conversion_carbon_dataset, {"conversion": {t: 4 for t in CARBON_KILNS if t.startswith("kiln")}}),
     "combined": (combined_carbon_dataset, {"combined": {"boiler_block": 2}}),
 }
-
-
-def taxed(p):
-    return p.assign(carbon_tax=np.array(TAX))
 
 
 def goaled(p, goal):
@@ -101,9 +101,17 @@ def test_carbon_with_an_all_block_module():
 
 
 def test_block_net_import_emissions_hand_toy():
-    """Section 16.2 D: block factor 0.75, hourly rows 0.375 and 1.125 t, yearly total 1.5 t."""
+    """
+    Section 16.2 D: the block factor is the step-weighted mean of the hourly ones.
+
+    Steps (1, 3) h, 2 MWh imported in the block of 4 h. Emission factor (0, 1): block factor 0.75, rows 0.375 and 1.125 t,
+    yearly total 1.5 t. Total emission factor (0.5, 2): block factor 1.625, rows 0.8125 and 2.4375 t. The two factors differ,
+    so that a row reading the wrong one fails.
+    """
     p = with_blocks(
-        net_import_toy([1.0, 3.0], [2, 0], [5, 5], factor=[0.0, 1.0]).assign(carbon=np.array(True)),
+        net_import_toy([1.0, 3.0], [2, 0], [5, 5], factor=[0.0, 1.0], total_factor=[0.5, 2.0]).assign(
+            carbon=np.array(True)
+        ),
         resource={"steel": 4},
     )
     m = solve_model(build_model(p))
@@ -111,7 +119,52 @@ def test_block_net_import_emissions_hand_toy():
     np.testing.assert_allclose(rows, [0.375, 1.125], atol=1e-9)
     assert rows.sum() == pytest.approx(1.5)
     total = solved(m, "operation_total_carbon_emissions").values.ravel()
-    np.testing.assert_allclose(total, [0.375, 1.125], atol=1e-9)
+    np.testing.assert_allclose(total, [0.8125, 2.4375], atol=1e-9)
+
+
+UNEVEN = [1.0, 2.0] * 4  # 12 h: with blocks of 3 h each block holds a step of 1 h and a step of 2 h
+
+
+@pytest.mark.parametrize("module", ["conversion", "combined"])
+def test_block_emissions_are_apportioned_by_step_duration(module):
+    """
+    Uneven steps inside a block: its tCO2 is shared among the steps in proportion to their duration.
+
+    The twin (flat power in the block) emits ``power x factor x step`` in each step, so an equal share per step
+    would differ from its rows.
+    """
+    if module == "conversion":
+        p = with_carbon(conversion_toy(UNEVEN), conversion=CARBON_KILNS)
+        lengths = {"conversion": {k: 3 for k in KILNS}}
+    else:
+        p = with_carbon(combined_toy(UNEVEN), conversion=CARBON_HEATER, combined=CARBON_BOILERS)
+        lengths = {"combined": {"boiler_block": 3}}
+    p = taxed(with_blocks(p, **lengths))
+    m, twin = solve_model(build_model(p)), solve_model(flat_twin(p, **lengths))
+    assert_twin_equal(m, twin, time_blocks(p, warn=False), [])
+    assert_emissions_equal(m, twin)
+    assert hourly_emissions(m).sum() > 0.1
+
+
+def test_carbon_tax_group_and_conditions_with_a_block_technology_equal_twin():
+    """A tax group (the per-area tax of its members is masked) and two operating conditions on a block technology."""
+    base = with_carbon(combined_toy([1.0] * 10), conversion=CARBON_HEATER, combined=CARBON_BOILERS)
+    p = with_conditions(base, [0.6, 0.4], demand=[base.demand, base.demand * 1.5])
+    p = p.assign_coords(carbon_tax_group=["t"])
+    p["carbon_tax_group_areas"] = xr.DataArray([[True], [True]], coords=[p.area, p.carbon_tax_group])
+    p["carbon_tax_group_rate"] = xr.DataArray([[20.0]], coords=[p.carbon_tax_group, p.year_op])
+    lengths = {"combined": {"boiler_block": 2}}
+    p = taxed(with_blocks(p, **lengths))
+    m, twin = solve_model(build_model(p)), solve_model(flat_twin(p, **lengths))
+    assert_twin_equal(m, twin, time_blocks(p, warn=False), [])
+    assert_emissions_equal(m, twin)
+    group = "operation_carbon_tax_group_costs"
+    got, want = solved(m, group), solved(twin, group)
+    assert float(got.sum()) > 1e-6  # the group pays
+    np.testing.assert_allclose(got.values, want.transpose(*got.dims).values, atol=1e-6)
+    # the two conditions emit differently: the conditions are not mixed
+    per_condition = hourly_emissions(m).sum("hour")
+    assert abs(float(per_condition.isel(operating_condition=0).sum() - per_condition.isel(operating_condition=1).sum())) > 1e-6
 
 
 @pytest.mark.parametrize("L, horizon", [(4, 24), (6, 24)])
@@ -145,7 +198,11 @@ def test_t0_carbon_gathers_the_same_emission_factor(parameters):
     from pommes.model.conversion import conversion_active_mask
     from pommes.model.sparsity import to_sparse_units
 
-    for module, got, mask in (("conversion", p_g, conversion_active_mask(p)), ("combined", pc_g, combined_active_mask(p))):
-        want, _ = to_sparse_units(p, "area", f"{module}_tech", mask, var_prefix=f"{module}_")
+    for module, got, got_idx, mask in (
+        ("conversion", p_g, idx_g, conversion_active_mask(p)),
+        ("combined", pc_g, idxc_g, combined_active_mask(p)),
+    ):
+        want, want_idx = to_sparse_units(p, "area", f"{module}_tech", mask, var_prefix=f"{module}_")
         name = f"{module}_emission_factor"
         xr.testing.assert_identical(got[name], want[name])
+        assert got_idx.equals(want_idx), module  # the same units, in the same order

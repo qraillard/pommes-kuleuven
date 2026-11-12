@@ -1,5 +1,6 @@
 """Module with function to post_process results and produce summaries."""
 
+import re
 from typing import Literal
 
 import pandas as pd
@@ -407,6 +408,8 @@ def get_sum_dims(
         sum_dims.append("year_inv")
     if "hour" in variable.dims:
         sum_dims.append("hour")
+    # time blocks: a block net generation is an energy per block, summed as the hours are
+    sum_dims += [d for d in variable.dims if str(d).startswith("time_block_")]
     if not by_year_op and "year_op" in variable.dims:
         sum_dims.append("year_op")
     if not by_area and "area" in variable.dims:
@@ -495,12 +498,21 @@ def calculate_total_of_a_type(
         ]
         calculated_total_dict = {}
         for var in variables_of_type_type:
-            variable_name = get_previous_word(
-                str(var).replace(operation_or_planning + "_", ""), type
+            # a block group (time blocks) is a part of its module: one table per module
+            variable_name = re.sub(
+                r"_block_\d+h$",
+                "",
+                get_previous_word(
+                    str(var).replace(operation_or_planning + "_", ""), type
+                ),
             )
             sum_dims = get_sum_dims(solution[var], by_year_op, by_area)
 
             calculated_total = solution[var].sum(dim=sum_dims)
+            # the columns of the groups of a module must carry the same name
+            calculated_total = calculated_total.rename(
+                re.sub(r"_block_\d+h", "", str(var))
+            )
             if (
                 OPERATING_CONDITION in solution.coords
                 and OPERATING_CONDITION not in calculated_total.dims
@@ -548,6 +560,17 @@ def calculate_total_of_a_type(
                 calculated_total, postfixes=["tech"], name=variable_name
             )
             calculated_total = calculated_total.to_dataframe()
+            if variable_name in calculated_total_dict:
+                # the groups of a module are outer-joined in the solution:
+                # each table has every label, 0 outside its own group
+                previous = calculated_total_dict[variable_name]
+                if calculated_total.index.nlevels > 1 and set(
+                    calculated_total.index.names
+                ) == set(previous.index.names):
+                    calculated_total = calculated_total.reorder_levels(
+                        previous.index.names
+                    )
+                calculated_total = previous.add(calculated_total, fill_value=0)
             calculated_total_dict[variable_name] = calculated_total
 
         # The levels are concatenated by position and named after the first

@@ -767,7 +767,7 @@ def _contributors(p: Dataset, tech_length: dict) -> dict:
     return out
 
 
-def time_blocks(p: Dataset) -> TimeBlocks:
+def time_blocks(p: Dataset, warn: bool = True) -> TimeBlocks:
     """
     Block lengths and hour-to-block maps of the dataset ``p`` (pure function).
 
@@ -779,7 +779,8 @@ def time_blocks(p: Dataset) -> TimeBlocks:
     length, or derived lengths that do not nest), R5 (a coarse electricity
     balance with TURPE), R8 (unknown availability rule) and R10 (every
     balance coarse). Warns (``UserWarning``) why a balance stays hourly when
-    some length is in use. The result carries ``step``, the
+    some length is in use, unless ``warn`` is False (the solution readers:
+    a plot or a summary never re-emits it; refusals still raise). The result carries ``step``, the
     ``time_step_duration`` that ``block_mean`` weights by. Call it on the
     full input dataset, before ``to_sparse_units``.
     """
@@ -859,7 +860,7 @@ def time_blocks(p: Dataset) -> TimeBlocks:
         **maps,
         step=p["time_step_duration"] if lengths else None,
     )
-    if tb.active and why_hourly:
+    if warn and tb.active and why_hourly:
         warnings.warn(
             "Time blocks give no gain on these balances: "
             + "; ".join(why_hourly)
@@ -1193,6 +1194,32 @@ BLOCK_MODULES = (
 _BLOCK_NAME = re.compile(
     rf"operation_(?:{'|'.join(BLOCK_MODULES)})_block_\d+h_"
 )
+
+
+def expand_to_hours(da: DataArray, tb: TimeBlocks, kind: str) -> DataArray:
+    """
+    A solved array on ``time_block_{L}h`` on the hours (section 11.3).
+
+    ``kind`` ``"energy"`` (net generation, shed or spilled energy): each block's value is shared among its steps
+    in proportion to their duration, so that the energy of a block is kept; ``"intensive"`` (power, dual): the
+    block's value is repeated. The single ``time_block_*`` dimension of ``da`` gives the length.
+    """
+    if kind not in ("energy", "intensive"):
+        raise ValueError(f"kind must be 'energy' or 'intensive', not {kind!r}")
+    (dim,) = [d for d in da.dims if str(d).startswith("time_block_")]
+    L = int(dim.removeprefix("time_block_").removesuffix("h"))
+    if L not in tb.block_of_hour:
+        raise ValueError(f"{dim}: no block of {L} h in these time blocks")
+    if not da.indexes[dim].equals(tb.duration[L].indexes[dim]):
+        raise ValueError(f"{dim}: the blocks of the array are not those of the time blocks")
+    b = tb.block_of_hour[L]
+    out = da.isel({dim: b.values}).rename({dim: "hour"}).assign_coords(hour=b["hour"].values)
+    if kind == "energy":
+        share = xr.DataArray(
+            tb.step.values / tb.duration[L].values[b.values], dims="hour", coords={"hour": b["hour"].values}
+        )
+        out = out * share
+    return out
 
 
 def check_block_dims(m) -> None:

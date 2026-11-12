@@ -31,6 +31,7 @@ import xarray as xr
 from pommes.io.build_input_dataset import compute_annuity_cost, compute_discount, compute_end_of_life
 from pommes.model.build_model import build_model
 from pommes.model.data_validation.dataset_check import check_inputs
+from pommes.post_process import module_hourly
 
 HOURS = 8760.0
 RATE = 0.05
@@ -141,7 +142,7 @@ def solve(ds: xr.Dataset) -> dict:
     _, condition = model.solve(solver_name="highs", output_flag=False)
     s = model.solution
     norm = float(ds.operation_year_duration) / float(ds.time_step_duration.sum())
-    power = s.operation_conversion_power.sum("hour")
+    power = module_hourly(s, "conversion", "power", ds).sum("hour")
     # shed and spilled energy [t] = time_step_duration x power, summed over the steps
     spill = (s.operation_spillage_power * ds.time_step_duration).sum("hour").fillna(0) * norm
     return {

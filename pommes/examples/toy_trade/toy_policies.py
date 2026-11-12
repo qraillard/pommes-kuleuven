@@ -29,6 +29,7 @@ import xarray as xr
 from pommes.io.build_input_dataset import compute_annuity_cost, compute_discount, compute_end_of_life
 from pommes.model.build_model import build_model
 from pommes.model.data_validation.dataset_check import check_inputs
+from pommes.post_process import module_hourly
 
 HOURS = 8760.0
 YEAR, RATE = 2030, 0.07
@@ -149,7 +150,7 @@ def solve(ds: xr.Dataset) -> dict:
     s = model.solution.squeeze(drop=True)
     shipped = s.operation_transport_power.to_pandas()
     # pommes-milp keeps the dense (area, conversion_tech) dimensions (pommes-kul: one entry per sparse unit)
-    use = s.operation_conversion_power.transpose("area", "conversion_tech").to_pandas()
+    use = module_hourly(s, "conversion", "power", ds).transpose("area", "conversion_tech").to_pandas()
     production = use.stack().rename_axis(["area", "tech"])
     price = None
     if "operation_carbon_goal_area_constraint" in model.constraints:
