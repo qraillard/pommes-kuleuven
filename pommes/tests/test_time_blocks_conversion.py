@@ -472,12 +472,14 @@ def test_block_sums_per_year_op():
 
 
 def test_daily_cap_non_dyadic_steps():
-    """20-min steps, L = 6 on 48 h: a block starting an ulp below a day boundary stays in its day (R5 tolerance)."""
+    """20-min steps, L = 6 on 48 h: a block starting an ulp below a day boundary stays in its day (R5 tolerance).
+
+    Block path only: the hourly daily row keeps 0.6.1+kul's tolerance-free floor (R12), so no twin comparison.
+    """
     p = with_blocks(conversion_toy([1 / 3] * 144), conversion={t: 6 for t in KILNS})
     p = with_values(p, "conversion_max_daily_production", {"kiln_b": 30.0 * 8760.0 / 144 * 3})
     tb = tb_of(p)
     assert day_of_blocks(tb, 6, 24).values.tolist() == [0] * 4 + [1] * 4
-    m, twin = _t2_pair(p, {t: 6 for t in KILNS})
-    free = solve_model(build_model(without(p, "conversion_max_daily_production")))
-    assert free.objective.value < m.objective.value - 1e-3  # the cap binds
-    assert_twin_equal(m, twin, tb, ["operation_conversion_block_6h_power"])
+    m = build_model(p)
+    row = m.constraints["operation_conversion_block_6h_daily_production_max_constraint"]
+    assert row.coords["day"].values.tolist() == [0, 1]

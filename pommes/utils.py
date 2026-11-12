@@ -1022,8 +1022,8 @@ def conversion_block_availability(
     if "hour" not in a.dims:
         return a
     group = tb.block_of_hour[L]
-    _check_group(group, None)
-    _check_axis(a, "hour", group.indexes["hour"])
+    check_group(group, None)
+    check_axis(a, "hour", group.indexes["hour"])
     rule = conversion_block_rule(p).sel(conversion_tech=techs)
     kinds = set(rule.values.tolist())
     smallest = a.groupby(group).min() if "min" in kinds else None
@@ -1062,14 +1062,14 @@ def longest_day_in_blocks(tb: TimeBlocks, L: int, d: int) -> DataArray:
     return xr.DataArray(longest.values, dims=dim, coords={dim: longest.index.values})
 
 
-def _check_group(group: DataArray, T_L: str | None) -> None:
+def check_group(group: DataArray, T_L: str | None) -> None:
     """H3: a groupby array is 1-D over ``hour`` or the block dimension."""
     assert group.ndim == 1 and group.dims in {("hour",), (T_L,)}, (
         group.dims
     )
 
 
-def _check_axis(expr, dim: str, ref: pd.Index) -> None:
+def check_axis(expr, dim: str, ref: pd.Index) -> None:
     """M1: linopy's groupby and ``isel`` act by position, so the axis must be the map's."""
     assert expr.indexes[dim].equals(ref), (
         f"{dim} of the expression is not the time map's axis"
@@ -1088,8 +1088,8 @@ def change_resolution(expr, tb: TimeBlocks, src: int | None, dst: int | None):
         out = expr
     elif src is None:
         group = tb.block_of_hour[dst]
-        _check_group(group, None)
-        _check_axis(expr, "hour", group.indexes["hour"])
+        check_group(group, None)
+        check_axis(expr, "hour", group.indexes["hour"])
         out = expr.groupby(group).sum()
     elif dst is not None and dst > src:  # coarser row: sum its blocks
         group = (
@@ -1097,8 +1097,8 @@ def change_resolution(expr, tb: TimeBlocks, src: int | None, dst: int | None):
             .sel(hour=tb.first_hour[src])
             .drop_vars("hour")
         )
-        _check_group(group, block_dim(src))
-        _check_axis(expr, block_dim(src), tb.duration[src].indexes[block_dim(src)])
+        check_group(group, block_dim(src))
+        check_axis(expr, block_dim(src), tb.duration[src].indexes[block_dim(src)])
         out = expr.groupby(group).sum()
     else:  # hourly or finer row: broadcast the share of the source block
         t_src = block_dim(src)
@@ -1111,8 +1111,8 @@ def change_resolution(expr, tb: TimeBlocks, src: int | None, dst: int | None):
                 .drop_vars("hour")
             )
             row_duration = tb.duration[dst]
-        _check_group(idx, "hour" if dst is None else block_dim(dst))
-        _check_axis(expr, t_src, tb.duration[src].indexes[t_src])
+        check_group(idx, "hour" if dst is None else block_dim(dst))
+        check_axis(expr, t_src, tb.duration[src].indexes[t_src])
         w = (
             row_duration
             / tb.duration[src].isel({t_src: idx}).drop_vars(t_src)
@@ -1230,6 +1230,11 @@ def check_group_coord(obj, ref: pd.Index, dim: str) -> None:
             f"{getattr(obj, 'name', obj)}: {dim} is not the group's "
             f"coordinate (H1/H2): {list(obj.indexes[dim])} != {list(ref)}."
         )
+
+
+def block_prefix(module: str, L: int | None) -> str:
+    """Row and variable name prefix of a group: today's for hourly, else the block one."""
+    return f"operation_{module}_" if L is None else f"operation_{module}_block_{L}h_"
 
 
 def check_partition(

@@ -13,18 +13,20 @@ from pommes.utils import (
     annual_mask,
     annual_quantity,
     block_dim,
+    block_prefix,
+    check_axis,
     check_block_daily_cap,
+    check_group,
     check_group_coord,
     check_partition,
     condition_coords,
     condition_mask,
     conversion_block_availability,
     day_of_blocks,
-    longest_day_in_blocks,
     expected_over_conditions,
+    longest_day_in_blocks,
     time_blocks,
 )
-from pommes.utils import _check_axis, _check_group
 
 
 def conversion_groups(
@@ -74,11 +76,7 @@ def _net_generation_mask(p: Dataset):
 
 def _group_variables(m: Model, p: Dataset, tb: TimeBlocks, L: int | None):
     """Power and net generation of a group, on its own technologies and time axis."""
-    prefix = (
-        "operation_conversion_"
-        if L is None
-        else f"operation_conversion_block_{L}h_"
-    )
+    prefix = block_prefix("conversion", L)
     time = p.hour if L is None else tb.duration[L][block_dim(L)]
     power = m.add_variables(
         name=f"{prefix}power",
@@ -127,11 +125,7 @@ class _ConversionRows:
         self.m, self.p, self.power = m, p_g, power
         self.net_generation, self.capacity = net_generation, capacity
         self.costs, self.norm, self.tb, self.L = costs, norm, tb, L
-        self.prefix = (
-            "operation_conversion_"
-            if L is None
-            else f"operation_conversion_block_{L}h_"
-        )
+        self.prefix = block_prefix("conversion", L)
         if L is None:
             self.T = "hour"
             self.D = self.D0 = p_g.time_step_duration
@@ -309,8 +303,7 @@ class _ConversionRows:
         mask = condition_mask(p, np.isfinite(p.conversion_max_daily_production))
         if self.L is None:
             start_time = p.time_step_duration.cumsum("hour") - p.time_step_duration
-            # 1e-9: same tolerance as the block anchoring (R5), for non-dyadic steps
-            day = np.floor((start_time + 1e-9) / p.operation_day_duration).astype("int64").rename("day")
+            day = (start_time // p.operation_day_duration).astype("int64").rename("day")
             self.add(
                 +norm * (p.time_step_duration * power).groupby(day).sum()
                 <= p.conversion_max_daily_production,
@@ -322,9 +315,9 @@ class _ConversionRows:
         d = int(p.operation_day_duration)
         if d % L == 0:  # blocks inside days
             day = day_of_blocks(tb, L, d)
-            _check_group(day, T)
+            check_group(day, T)
             expr = self.D * power
-            _check_axis(expr, T, tb.duration[L].indexes[T])
+            check_axis(expr, T, tb.duration[L].indexes[T])
             self.add(
                 +norm * expr.groupby(day).sum()
                 <= p.conversion_max_daily_production,

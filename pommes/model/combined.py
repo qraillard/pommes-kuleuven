@@ -13,6 +13,7 @@ from pommes.utils import (
     TimeBlocks,
     add_to_balances,
     block_dim,
+    block_prefix,
     check_group_coord,
     check_partition,
     condition_coords,
@@ -61,9 +62,7 @@ def _net_generation_mask(p: Dataset):
 
 def _group_variables(m: Model, p: Dataset, tb: TimeBlocks, L: int | None):
     """Power and net generation of a group, on its own technologies and time axis."""
-    prefix = (
-        "operation_combined_" if L is None else f"operation_combined_block_{L}h_"
-    )
+    prefix = block_prefix("combined", L)
     time = p.hour if L is None else tb.duration[L][block_dim(L)]
     power = m.add_variables(
         name=f"{prefix}power",
@@ -112,11 +111,7 @@ class _CombinedRows:
         self.m, self.p, self.power = m, p_g, power
         self.net_generation, self.capacity = net_generation, capacity
         self.costs, self.norm = costs, norm
-        self.prefix = (
-            "operation_combined_"
-            if L is None
-            else f"operation_combined_block_{L}h_"
-        )
+        self.prefix = block_prefix("combined", L)
         if L is None:
             self.T = "hour"
             self.D = self.D0 = p_g.time_step_duration

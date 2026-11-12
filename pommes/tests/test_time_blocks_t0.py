@@ -13,6 +13,7 @@ from pommes.tests.time_blocks_helper import (
     assert_t0,
     combined_toy,
     conversion_t2_dataset,
+    conversion_toy,
     hand_toy,
     lp_text,
     process_hourly,
@@ -96,3 +97,21 @@ def test_t0_conversion_with_every_row():
     p = with_values(p, "conversion_max_cumulative_production", {"kiln_c": 1e9})
     p = p.assign(operation_year_weight=("year_op", [10.0]))
     assert_t0(p)
+
+
+def test_t0_daily_cap_on_20_minute_steps():
+    """R12: the hourly daily row is 0.6.1+kul's, a tolerance-free ``start // day``, even on non-dyadic steps.
+
+    ``assert_t0`` compares the branch with itself, so the day map is also checked against the plain floor:
+    step 72 of 144 steps of 1/3 h starts an ulp below hour 24 and, with a 1e-9 tolerance, would move to day 1.
+    """
+    p = conversion_toy([1 / 3] * 144)
+    p = with_values(p, "conversion_max_daily_production", {"kiln_b": 1e6})
+    assert_t0(p)
+    row = build_model(p).constraints["operation_conversion_daily_production_max_constraint"]
+    step = p.time_step_duration
+    start = step.cumsum("hour") - step
+    expected = (start // p.operation_day_duration).astype("int64")
+    assert expected.values[72] == 0  # the ulp case stays in day 0
+    terms = (row.lhs.vars != -1).sum("_term").sel(day=0)
+    assert terms.max().item() == int((expected == 0).sum())
