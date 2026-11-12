@@ -25,15 +25,18 @@ def _add_emissions(defs, expr, tb, L, hourly_scale=None):
     """
     Add ``expr`` (tCO2 per step of a group on resolution ``L``) to the emission rows ``defs``.
 
-    The hourly group (``L`` None) adds today's ``expr * hourly_scale`` with ``+=``;
-    a block group adds the block energy broadcast to the hours by
-    ``change_resolution``, joined to the rows by label (``join="left"``).
+    Without blocks (``not tb.active``) it is today's ``+= expr * hourly_scale``. With
+    blocks every group, hourly or block, is converted to the hours by
+    ``change_resolution`` and joined to the rows by label (``join="left"``); the
+    hourly group is first scaled by ``hourly_scale`` (the step durations), a block group
+    arrives as an energy per block.
     """
+    part = expr if (L is not None or hourly_scale is None) else expr * hourly_scale
     for con in defs:
-        if L is None:
-            con.lhs += expr if hourly_scale is None else expr * hourly_scale
+        if not tb.active:
+            con.lhs += part
         else:
-            con.lhs = con.lhs.add(change_resolution(expr, tb, L, None), join="left")
+            con.lhs = con.lhs.add(change_resolution(part, tb, L, None), join="left")
 
 
 def add_carbon(

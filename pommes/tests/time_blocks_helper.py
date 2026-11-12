@@ -508,6 +508,27 @@ def with_carbon(p: xr.Dataset, conversion=None, combined=None, tax=None, goal=No
     return p.assign(out)
 
 
+CARBON_KILNS = {"well": 0.1, "backup": 0.9, "kiln_a": 0.3, "kiln_b": 0.5, "kiln_c": 0.2, "kiln_d": 0.4}
+CARBON_BOILERS = {"electric_boiler": [0.1, 0.1], "boiler_block": [0.5, 0.2], "steady_kiln": [0.3, 0.3]}
+CARBON_HEATER = {"well": 0.3, "heater": 0.8}
+
+
+def conversion_carbon_dataset() -> xr.Dataset:
+    """``conversion_t2_dataset`` (kilns on 4 h blocks) with carbon on and an emission factor on every technology; no tax, no goal."""
+    return with_carbon(conversion_t2_dataset(), conversion=CARBON_KILNS)
+
+
+def combined_carbon_dataset() -> xr.Dataset:
+    """``combined_t2_dataset`` (``boiler_block`` on 2 h blocks) with carbon on and an emission factor on every technology; no tax, no goal."""
+    return with_carbon(combined_t2_dataset(), conversion=CARBON_HEATER, combined=CARBON_BOILERS)
+
+
+def combined_all_block_carbon_dataset() -> xr.Dataset:
+    """``combined_toy`` on 10 h with every combined technology on 2 h blocks (no hourly combined variable), carbon on, a tax of 15."""
+    p = with_carbon(combined_toy([1.0] * 10), conversion=CARBON_HEATER, combined=CARBON_BOILERS, tax=15.0)
+    return with_blocks(p, combined={t: 2 for t in CARBON_BOILERS})
+
+
 def solve_model(m):
     """Solve ``m`` with HiGHS and assert it is optimal; returns ``m``."""
     assert m.solve(solver_name="highs")[:2] == ("ok", "optimal")

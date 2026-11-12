@@ -156,6 +156,8 @@ def test_t0_carbon_with_nan_lengths(parameters):
     assert float(parameters.combined_emission_factor.max()) > 0
     p = with_blocks(parameters)
     assert all(name in p for name in BLOCK_PARAMETERS)
+    assert all(bool(p[name].isnull().all()) for name in BLOCK_PARAMETERS if name != "conversion_time_block_rule")
+    assert set(p.conversion_time_block_rule.values.tolist()) == {"min"}
     assert_t0(p)
     m = build_model(p)
     assert "operation_carbon_emissions_def" in m.constraints

@@ -8,12 +8,15 @@ from pommes.model.build_model import build_model
 from pommes.model.combined import combined_groups
 from pommes.model.conversion import conversion_groups
 from pommes.tests.time_blocks_helper import (
+    CARBON_BOILERS,
+    CARBON_KILNS,
     assert_twin_equal,
     coarse_step_dataset,
     coarse_step_reference,
-    combined_t2_dataset,
+    combined_all_block_carbon_dataset,
+    combined_carbon_dataset,
     combined_toy,
-    conversion_t2_dataset,
+    conversion_carbon_dataset,
     flat_twin,
     net_import_toy,
     solve_model,
@@ -25,21 +28,20 @@ from pommes.tests.time_blocks_helper import (
 from pommes.utils import time_blocks
 
 EMISSIONS = "operation_carbon_emissions"
-KILNS = {"well": 0.1, "backup": 0.9, "kiln_a": 0.3, "kiln_b": 0.5, "kiln_c": 0.2, "kiln_d": 0.4}
-BOILERS = {"electric_boiler": [0.1, 0.1], "boiler_block": [0.5, 0.2], "steady_kiln": [0.3, 0.3]}
-HEATER = {"well": 0.3, "heater": 0.8}
 TAX = 15.0
+# the builder of each case and the block lengths its flat twin repeats
+CASES = {
+    "conversion": (conversion_carbon_dataset, {"conversion": {t: 4 for t in CARBON_KILNS if t.startswith("kiln")}}),
+    "combined": (combined_carbon_dataset, {"combined": {"boiler_block": 2}}),
+}
 
 
-def conversion_blocks(**kw):
-    return with_carbon(conversion_t2_dataset(), conversion=KILNS, **kw), {"conversion": {t: 4 for t in KILNS if t.startswith("kiln")}}
+def taxed(p):
+    return p.assign(carbon_tax=np.array(TAX))
 
 
-def combined_blocks(**kw):
-    return with_carbon(combined_t2_dataset(), conversion=HEATER, combined=BOILERS, **kw), {"combined": {"boiler_block": 2}}
-
-
-CASES = {"conversion": conversion_blocks, "combined": combined_blocks}
+def goaled(p, goal):
+    return p.assign(carbon_goal=np.array(goal))
 
 
 def hourly_emissions(m):
@@ -57,7 +59,8 @@ def yearly(m, p):
 
 @pytest.mark.parametrize("case", CASES)
 def test_block_tech_hourly_emissions_equal_twin(case):
-    p, lengths = CASES[case](tax=TAX)
+    make, lengths = CASES[case]
+    p = taxed(make())
     m = solve_model(build_model(p))
     twin = solve_model(flat_twin(p, **lengths))
     assert_twin_equal(m, twin, time_blocks(p), [])
@@ -67,17 +70,18 @@ def test_block_tech_hourly_emissions_equal_twin(case):
 
 @pytest.mark.parametrize("case", CASES)
 def test_carbon_tax_and_goal_with_blocks_equal_twin(case):
-    free_p, lengths = CASES[case]()
+    make, lengths = CASES[case]
+    free_p = make()
     free = yearly(solve_model(build_model(free_p)), free_p)
     # binding goal: 80 % of what the cost-optimal dispatch emits
-    p, _ = CASES[case](goal=0.8 * free)
+    p = goaled(free_p, 0.8 * free)
     m, twin = solve_model(build_model(p)), solve_model(flat_twin(p, **lengths))
     assert abs(m.constraints["operation_carbon_goal_constraint"].dual.values).max() > 1e-9
     assert_twin_equal(m, twin, time_blocks(p), [])
     assert_emissions_equal(m, twin)
     assert yearly(m, p) == pytest.approx(0.8 * free, rel=1e-7)
     # binding tax: the emissions fall below the free ones
-    p, _ = CASES[case](tax=TAX)
+    p = taxed(free_p)
     m, twin = solve_model(build_model(p)), solve_model(flat_twin(p, **lengths))
     assert yearly(m, p) < free - 1e-6
     assert_twin_equal(m, twin, time_blocks(p), [])
@@ -86,8 +90,8 @@ def test_carbon_tax_and_goal_with_blocks_equal_twin(case):
 
 def test_carbon_with_an_all_block_module():
     """No hourly ``operation_combined_power``: carbon skips it, builds, and equals the twin."""
-    lengths = {t: 2 for t in BOILERS}
-    p = with_blocks(with_carbon(combined_toy([1.0] * 10), conversion=HEATER, combined=BOILERS, tax=TAX), combined=lengths)
+    p = combined_all_block_carbon_dataset()
+    lengths = {t: 2 for t in CARBON_BOILERS}
     m = solve_model(build_model(p))
     assert "operation_combined_power" not in m.variables
     twin = solve_model(flat_twin(p, combined=lengths))
@@ -125,9 +129,11 @@ def test_coarse_net_import_carbon_tax_equals_reference(L, horizon):
     assert yearly(m, p) < yearly(solve_model(build_model(free)), free) - 1e-6  # and it binds
 
 
-def test_t0_carbon_gathers_the_same_emission_factor():
+def test_t0_carbon_gathers_the_same_emission_factor(parameters):
     """``keep`` changes the sparse T0 path: the emission factor is today's gather (dense: ``p`` itself)."""
-    p = with_carbon(combined_toy([1.0] * 4), conversion=HEATER, combined=BOILERS)
+    p = parameters
+    # the unread conversion parameters that ``keep`` drops before the gather include per-hour ones (C3)
+    assert any("hour" in p[n].dims for n in p.data_vars if n.startswith("conversion_") and n != "conversion_emission_factor")
     tb = time_blocks(p)
     [(L, p_g, idx_g)] = conversion_groups(p, tb, keep=["conversion_emission_factor"])
     [(Lc, pc_g, idxc_g)] = combined_groups(p, tb, keep=["combined_emission_factor"])
