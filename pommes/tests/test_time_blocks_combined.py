@@ -5,7 +5,9 @@ import pandas as pd
 import pytest
 
 from pommes.model.build_model import build_model
+from pommes.tests.conditions_helper import with_conditions
 from pommes.tests.time_blocks_helper import (
+    BLOCK_PARAMETERS,
     assert_twin_equal,
     combined_derived_coarse_dataset,
     combined_t1_dataset,
@@ -84,10 +86,7 @@ def _values(m, name, tb=None):
 
 def test_combined_t1_block_equal_to_step():
     p = combined_t1_dataset()
-    hourly = solve_model(build_model(p.drop_vars(
-        ["combined_time_block_hrs", "conversion_time_block_hrs", "resource_time_block_hrs",
-         "conversion_time_block_rule"]
-    )))
+    hourly = solve_model(build_model(p.drop_vars(BLOCK_PARAMETERS)))
     m = solve_model(build_model(p))
     assert "operation_combined_power" not in m.variables  # every combined tech is on 1 h blocks
     assert m.objective.value == pytest.approx(hourly.objective.value, rel=1e-9)
@@ -116,8 +115,7 @@ def test_combined_t2_flat_twin(dt, L):
         else with_blocks(combined_toy(dt), combined={"boiler_block": L})
     )
     m, twin = solve_model(build_model(p)), solve_model(flat_twin(p, combined={"boiler_block": L}))
-    hourly = solve_model(build_model(p.drop_vars(["combined_time_block_hrs", "conversion_time_block_hrs",
-        "resource_time_block_hrs", "conversion_time_block_rule"])))
+    hourly = solve_model(build_model(p.drop_vars(BLOCK_PARAMETERS)))
     assert m.objective.value > hourly.objective.value + 1.0  # the flat constraint really binds
     assert_twin_equal(m, twin, tb_of(p), [f"operation_combined_block_{L}h_power"])
 
@@ -206,6 +204,31 @@ def test_derived_coarse_heat_equals_the_flat_twin():
     assert_twin_equal(m, twin, time_blocks(blocks), [f"{BLOCK}power"])
 
 
-def test_pinned_conversion_dataset_solves():
+def test_pinned_module_datasets_solve_hourly():
     for module in ("combined", "conversion"):
         solve_model(build_model(pinned_module_dataset(module)))
+
+
+def test_block_mode_constant_operation_flat_twin():
+    """A block tech with every ramp 0 gets one equality per mode (the block mode_constant rows)."""
+    p = combined_toy([1.0] * 10)
+    p["combined_mode_ramp_up"].loc[{"combined_tech": "steady_kiln"}] = 0.0
+    p["combined_mode_ramp_down"].loc[{"combined_tech": "steady_kiln"}] = 0.0
+    p = with_blocks(p, combined={"steady_kiln": 2})
+    m = solve_model(build_model(p))
+    assert f"{BLOCK}mode_constant_operation_constraint" in m.constraints
+    assert f"{BLOCK}constant_operation_constraint" not in m.constraints
+    twin = solve_model(flat_twin(p, combined={"steady_kiln": 2}))
+    assert_twin_equal(m, twin, tb_of(p), [f"{BLOCK}power"])
+
+
+def test_block_two_years_two_conditions_flat_twin():
+    """Two year_op and two operating conditions (weights 0.6 / 0.4) on a block group."""
+    base = combined_toy([1.0] * 10)
+    base = base.reindex(year_op=np.array([2030, 2031], dtype="int64"), method="ffill")
+    low, high = base.demand, base.demand * 1.5
+    p = with_conditions(base, [0.6, 0.4], demand=[low, high])
+    p = with_blocks(p, combined={"boiler_block": 2})
+    m = solve_model(build_model(p))
+    twin = solve_model(flat_twin(p, combined={"boiler_block": 2}))
+    assert_twin_equal(m, twin, tb_of(p), [f"{BLOCK}power"])

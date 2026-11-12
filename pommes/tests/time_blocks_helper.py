@@ -27,6 +27,9 @@ _PARAMETERS = (
     ("resource_time_block_hrs", "resource"),
 )
 
+# every block parameter: dropping them all gives the hourly model
+BLOCK_PARAMETERS = [n for n, _ in _PARAMETERS] + ["conversion_time_block_rule"]
+
 
 def _per(p, dim, values):
     da = xr.DataArray(
@@ -83,8 +86,7 @@ def assert_t0(p: xr.Dataset) -> None:
     this guards the NaN parameters and the ``tb`` plumbing, not drift against
     0.6.1+kul (``compare_lp.py`` does).
     """
-    names = [n for n, _ in _PARAMETERS] + ["conversion_time_block_rule"]
-    bare = build_model(p.drop_vars(names, errors="ignore"))
+    bare = build_model(p.drop_vars(BLOCK_PARAMETERS, errors="ignore"))
     nan = build_model(with_blocks(p))
     assert lp_text(bare) == lp_text(nan)
     for name in [*nan.variables, *nan.constraints]:
@@ -413,8 +415,7 @@ def flat_twin(p: xr.Dataset, conversion=None, combined=None):
     first of its block, per technology (per unit and mode for combined) of
     ``conversion`` / ``combined`` (``{tech: length}``). Not solved.
     """
-    names = [n for n, _ in _PARAMETERS] + ["conversion_time_block_rule"]
-    clean = p.drop_vars(names, errors="ignore")
+    clean = p.drop_vars(BLOCK_PARAMETERS, errors="ignore")
     m = build_model(clean)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")

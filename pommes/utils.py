@@ -1172,6 +1172,8 @@ def check_partition(
     """
     live = {key: part for key, part in parts.items() if len(part)}
     members = [x for part in live.values() for x in part]
-    assert len(members) == len(set(members)), "groups overlap"
-    assert set(members) == set(full), "groups do not cover the full index"
+    if len(members) != len(set(members)):
+        raise AssertionError("groups overlap")
+    if set(members) != set(full):
+        raise AssertionError("groups do not cover the full index")
     return live
