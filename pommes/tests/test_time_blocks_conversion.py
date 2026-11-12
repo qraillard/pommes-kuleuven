@@ -105,6 +105,40 @@ def test_block_contributor_has_one_term_per_unit_in_a_coarse_row():
         assert (counts.sel(area=area) == expected).all(), area
 
 
+def _terms(m, variable, constraint, resource):
+    """Coefficients and the number of terms per row of ``variable`` in the rows of ``resource`` of ``constraint``."""
+    live = sorted(set(np.unique(m.variables[variable].labels.sel(resource=resource).values)) - {-1})
+    con = m.constraints[constraint]
+    vars_, coeffs = con.vars.sel(resource=resource), con.coeffs.sel(resource=resource)
+    mine = vars_.isin(live)
+    return np.unique(coeffs.where(mine).values[mine.values]), mine.sum("_term")
+
+
+def test_routing_of_a_block_group_to_a_finer_derived_and_a_coarser_forced_balance():
+    """Checkpoint point 9: a block group reaches a finer balance by broadcast and a coarser one by sum."""
+    # finer: steel is derived at 2 h (the smallest length), the kilns of 4 h are shared out by duration
+    lengths = {"backup": 2, **{t: 4 for t in KILNS}}
+    m = build_model(with_blocks(conversion_toy([1.0] * 8), conversion=lengths))
+    con = "operation_adequacy_block_2h_constraint"
+    assert list(m.constraints[con].labels.indexes["resource"]) == ["steel"]
+    coeffs, per_row = _terms(m, "operation_conversion_block_4h_net_generation", con, "steel")
+    assert coeffs.tolist() == [0.5]  # 2 h of a 4 h block
+    coeffs, _ = _terms(m, "operation_conversion_block_2h_net_generation", con, "steel")
+    assert coeffs.tolist() == [1.0]  # identity
+    # coarser: steel is forced to 4 h, the blocks of 2 h are summed: two terms per unit and row
+    p = with_blocks(conversion_toy([1.0] * 8), conversion={t: 2 for t in ["backup", *KILNS]}, resource={"steel": 4})
+    m = build_model(p)
+    con = "operation_adequacy_block_4h_constraint"
+    coeffs, per_row = _terms(m, "operation_conversion_block_2h_net_generation", con, "steel")
+    assert coeffs.tolist() == [1.0]
+    live = (m.variables["operation_conversion_block_2h_net_generation"].labels.sel(resource="steel") != -1)
+    per_block = live.isel(time_block_2h=0, year_op=0).values.ravel()
+    areas = pd.Series([u[0] for u in units_of(m.variables["operation_conversion_block_2h_net_generation"])])
+    for area, units in areas[per_block].value_counts().items():
+        assert (per_row.sel(area=area) == 2 * units).all(), area
+    solve_model(m)
+
+
 def test_block_model_is_smaller():
     """M7: the RAM aim. Block variables have no hour dimension, the coarse balance has B_L rows."""
     p = hand_toy_c()
