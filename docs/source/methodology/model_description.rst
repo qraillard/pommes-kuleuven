@@ -695,7 +695,9 @@ are unchanged (one per unit).
   per unit of energy.
 - **Carbon.** The emissions of a block technology are spread flat over the steps of its block (each step gets
   :math:`(\Delta T)_{t} \, \text{ef} \, P_b`), block net-import emissions likewise (:math:`(\Delta T)_{t}/D_L(b)` of the
-  block emission). Yearly sums, goals, taxes and the objective are therefore equal to those of the flat model.
+  block emission). For block technologies the yearly sums, goals, taxes and the objective are therefore equal to those
+  of the flat model; the emission factors of coarse net imports are block means, so their yearly sums are equal only
+  against flat imports.
 
 Refused inputs
 --------------
@@ -736,8 +738,10 @@ equality forcing the power to be constant inside each block.
     * - Availability rule ``mean``
       - relaxation
     * - Coarse resource balance (derived or forced)
-      - relaxation of the hourly balance: the block holds the energy of the block, not of each step; exact against the
-        model run with steps of :math:`L` hours when every contributor has the balance's length and the horizon is a multiple of :math:`L`
+      - relaxation of the hourly balance where net import prices and emission factors are constant inside each block (or
+        net import is absent): the block holds the energy of the block, not of each step; otherwise it has no sign
+        against the hourly balance. Exact against the model run with steps of :math:`L` hours when every contributor has the
+        balance's length and the horizon is a multiple of :math:`L`
     * - Load shedding and spillage on a coarse resource
       - exact
     * - Flexible demand on a coarse balance

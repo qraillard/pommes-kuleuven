@@ -1,5 +1,6 @@
 """Shared helpers of the time-blocks tests (identical in both engines)."""
 
+import inspect
 import re
 import tempfile
 import warnings
@@ -11,6 +12,7 @@ import pytest
 import xarray as xr
 
 from pommes.model.build_model import build_model
+from pommes.tests.conditions_helper import with_conditions
 from pommes.utils import TimeBlocks, block_dim, block_mean, time_blocks
 
 try:  # sparse engine: solved variables sit on a unit index
@@ -599,6 +601,12 @@ def flat_twin(p: xr.Dataset, conversion=None, combined=None):
     return m
 
 
+def assert_same(a: xr.DataArray, b: xr.DataArray, name: str = "") -> None:
+    """``a`` and ``b`` agree to 1e-6 on the union of their labels (NaN read as 0, dimensions in any order)."""
+    a, b = xr.align(a, b, join="outer")
+    np.testing.assert_allclose(a.fillna(0).values, b.transpose(*a.dims).fillna(0).values, atol=1e-6, err_msg=name)
+
+
 def assert_twin_equal(m_block, m_twin, tb: TimeBlocks, powers: list[str]) -> None:
     """
     A solved block model equals its solved flat twin (section 15.1).
@@ -609,21 +617,15 @@ def assert_twin_equal(m_block, m_twin, tb: TimeBlocks, powers: list[str]) -> Non
     """
     assert m_block.objective.value == pytest.approx(m_twin.objective.value, rel=1e-7)
 
-    def same(a, b, name):
-        a, b = xr.align(a, b, join="outer")
-        np.testing.assert_allclose(
-            a.fillna(0).values, b.transpose(*a.dims).fillna(0).values, atol=1e-6, err_msg=name
-        )
-
     for name in m_block.variables:
         if name.startswith("planning_") or name.endswith("_capacity"):
-            same(solved(m_block, name), solved(m_twin, name), name)
+            assert_same(solved(m_block, name), solved(m_twin, name), name)
     for name in powers:
         twin_name = re.sub(r"_block_\d+h_", "_", name)
         block = to_hours(solved(m_block, name), tb)
         tech = next(d for d in block.dims if d.endswith("_tech"))
         hourly = solved(m_twin, twin_name).sel({tech: block.indexes[tech]})
-        same(block, hourly, name)
+        assert_same(block, hourly, name)
 
 
 def units_of(obj) -> list[tuple]:
@@ -636,8 +638,9 @@ def units_of(obj) -> list[tuple]:
 
 
 def variables_in(m, con) -> set[str]:
-    """Names of the variables with a live term in the left-hand side of ``con``."""
-    used = set(np.unique(con.lhs.vars.values)) - {-1}
+    """Names of the variables with a live term (a label and a non-zero coefficient) in the left-hand side of ``con``."""
+    labels, coeffs = con.lhs.vars.values, con.lhs.coeffs.values
+    used = set(np.unique(labels[(labels != -1) & np.isfinite(coeffs) & (coeffs != 0)]))
     return {
         name
         for name in m.variables
@@ -1119,14 +1122,8 @@ def flexdem_short_block_dataset() -> xr.Dataset:
     return with_blocks(flexdem_toy(10), conversion={"furnace": 4})
 
 
-def flexdem_ratio_dataset() -> xr.Dataset:
-    """
-    ``flexdem_block_dataset`` with ratios that bind and no ramp: area ``a`` meets the maximum, area ``b`` the minimum.
-
-    The areas are independent, so each one gets the flexible heat energy per block (probed) that pushes it against
-    one of the two limits, with a unique optimum.
-    """
-    p = flexdem_block_dataset()
+def _ratio_cells(p: xr.Dataset) -> xr.Dataset:
+    """``p`` (a ``coarse_step_dataset`` of 4 h blocks) with ratios that bind and no flexdem ramp: area ``a`` meets the maximum, ``b`` the minimum."""
     cells = {"a": ([2.3, 9.1, 5.7, 2.9, 8.6, 11.3], 1.43, 0.5), "b": ([4.1, 8.3, 5.0, 9.4, 9.2, 4.2], 3.0, 0.83)}
     heat = list(p.resource.values).index("heat")
     demand = p.flexdem_demand.copy(deep=True)
@@ -1137,3 +1134,275 @@ def flexdem_ratio_dataset() -> xr.Dataset:
         p["flexdem_minload_ratio"].values[i] = minimum
     nan = p.flexdem_ramp_up * np.nan
     return p.assign(flexdem_demand=demand, flexdem_ramp_up=nan, flexdem_ramp_down=nan)
+
+
+def flexdem_ratio_dataset() -> xr.Dataset:
+    """
+    ``flexdem_block_dataset`` with ratios that bind and no ramp: area ``a`` meets the maximum, area ``b`` the minimum.
+
+    The areas are independent, so each one gets the flexible heat energy per block (probed) that pushes it against
+    one of the two limits, with a unique optimum.
+    """
+    return _ratio_cells(flexdem_block_dataset())
+
+
+# --- whole-model datasets (Task 12): ``parameters`` with every module on, an idle resource, block inputs ---
+
+
+def _fixture(name: str, _cache: dict = {}):
+    """
+    The value of the conftest fixture ``name`` outside pytest (a zero-argument builder cannot request it).
+
+    Calls the plain function behind the fixture, with its own arguments resolved the same way; the result is cached
+    and handed out as a deep copy.
+    """
+    from pommes.tests import conftest
+
+    if name not in _cache:
+        function = getattr(conftest, name).__wrapped__
+        _cache[name] = function(*[_fixture(a) for a in inspect.signature(function).parameters])
+    return _cache[name].copy(deep=True)
+
+
+def with_idle(p: xr.Dataset) -> xr.Dataset:
+    """``p`` with a first resource ``idle`` that holds nothing (R10): 0 in every factor, price, demand and cap."""
+    names = ["idle", *p.resource.values]
+    out = p.reindex(resource=names)
+    for name in p.data_vars:
+        if "resource" in p[name].dims:
+            out[name] = p[name].reindex(resource=names, fill_value=0.0)
+    return out
+
+
+HEAT_IMPORT_PRICE_PER_STEP = [0.3, 0.3, 5.0, 5.0, 0.4, 0.4, 5.0, 5.0, 0.5, 0.5]  # cheap for two steps in four
+
+
+def _whole_base() -> xr.Dataset:
+    """
+    The ``parameters`` fixture (storage, transport, turpe, net_import, carbon, conversion, combined) with an idle
+    resource, priced spillage and a heat import that decides the optimum.
+
+    One vintage and one year of operation (the fixture prices its vintages alike, so the capacities of several years
+    can be split in several ways at the same cost, and the twin comparison of capacities needs one optimum). The
+    fixture alone imports nothing and emits nothing: here heat may be imported at a price that is low for two steps in four
+    and high otherwise (``HEAT_IMPORT_PRICE_PER_STEP``: a flat block boiler cannot follow it; no yearly maximum), with an emission factor taxed by the
+    fixture's carbon tax (the carbon goal is NaN: a binding goal would tie the two areas). The electric boiler covers
+    the rest of the heat. Every other price keeps the fixture's value, which does not depend on the hour.
+    """
+    p = _fixture("parameters").sel(year_dec=[2040], year_inv=[2020], year_op=[2020])
+    p = priced_spillage(with_idle(p))
+    price = p.net_import_import_price.expand_dims(hour=p.hour.values).transpose("hour", "resource").copy()
+    price.loc[{"resource": "heat"}] = np.resize(HEAT_IMPORT_PRICE_PER_STEP, p.sizes["hour"])
+    cap = p.net_import_max_yearly_energy_import.copy()
+    cap.loc[{"resource": "heat"}] = np.nan
+    factor, total = p.net_import_emission_factor.copy(), p.net_import_total_emission_factor.copy()
+    factor.loc[{"resource": "heat"}], total.loc[{"resource": "heat"}] = 0.15, 0.25
+    return p.assign(
+        net_import_import_price=price,
+        net_import_max_yearly_energy_import=cap,
+        net_import_emission_factor=factor,
+        net_import_total_emission_factor=total,
+        carbon_goal=xr.full_like(p.carbon_goal, np.nan),
+    )
+
+
+def whole_t1_dataset() -> xr.Dataset:
+    """``_whole_base`` with every conversion and combined length 1 h on steps of 1 h (T1: block equals step)."""
+    p = _whole_base()
+    return with_blocks(
+        p,
+        conversion={t: 1 for t in p.conversion_tech.values},
+        combined={t: 1 for t in p.combined_tech.values},
+    )
+
+
+def whole_t2_dataset() -> xr.Dataset:
+    """
+    ``_whole_base`` with the conversion technologies but ``wind_onshore`` and the electric boiler on blocks of 2 h.
+
+    Every balance is hourly: electricity, hydrogen and methane have storage, and heat is forced to the step (1 h).
+    ``wind_onshore`` stays hourly: it is must-run with an availability that varies inside a block, which is a
+    relaxation of the twin and not an equality (D9').
+    """
+    p = _whole_base()
+    return with_blocks(
+        p,
+        conversion={t: 2 for t in p.conversion_tech.values if t != "wind_onshore"},
+        combined={"electric_boiler": 2},
+        resource={"heat": 1},
+    )
+
+
+T3B_HOURS = 9  # with blocks of 2 h the last block holds one step
+T3B_PROFILE = [1.2, 0.8, 1.0, 1.1, 0.9, 1.3, 0.7, 1.0, 1.2]  # demand shape of methane and hydrogen, per step
+
+
+def whole_t3b_dataset() -> xr.Dataset:
+    """
+    ``_whole_base`` on 9 steps with ``methane`` and ``hydrogen`` forced to 2 h (the last block holds one step).
+
+    Storage, transport and conversion contribute hourly to both balances (summed into the coarse rows). Methane and
+    hydrogen demand vary from step to step (``T3B_PROFILE``) so that each coarse row holds a different sum. Their
+    net_import prices and emission factors do not depend on the hour, so they are constant inside each block, and no
+    flexdem ramp is set: the coarse model is a relaxation of the hourly one.
+    """
+    p = _whole_base().isel(hour=slice(0, T3B_HOURS))
+    demand = p.demand.expand_dims(area=p.area.values, hour=p.hour.values).transpose("area", "hour", "resource", "year_op").copy()
+    profile = xr.DataArray(T3B_PROFILE, dims="hour", coords={"hour": p.hour.values})
+    demand.loc[{"resource": "methane"}] = xr.full_like(demand.sel(resource="methane"), 1.5) * profile
+    demand.loc[{"resource": "hydrogen"}] = demand.sel(resource="hydrogen") * profile
+    return with_blocks(p.assign(demand=demand), resource={"methane": 2, "hydrogen": 2})
+
+
+# --- retrofit with blocks (section 16.3) ---
+
+RETROFIT_YEARS = dict(year_inv=[2020, 2030, 2040], year_dec=[2040, 2050, 2060], year_op=[2030, 2040], year_ret=[2040])
+RETROFIT_DEMAND_GROWTH = [1.0, 1.6]  # per year_op: the retrofitted capacity is needed in the second one
+
+
+def _on_retrofit_years(p: xr.Dataset, base_cost: dict[str, float]) -> xr.Dataset:
+    """
+    ``p`` (one year, one vintage) on the retrofit years: operation in 2030 and 2040, vintages 2020, 2030, 2040.
+
+    Every technology of the modules of ``base_cost`` lives 20 years (a vintage ends exactly 20 years later, early
+    decommissioning off) at an annuity of the module's cost plus 0.1 per technology (distinct), and the demand grows in
+    the second year.
+    """
+    years = {k: np.array(v, dtype="int64") for k, v in RETROFIT_YEARS.items() if k != "year_ret"}
+    out = p.drop_dims(["year_inv", "year_dec", "year_op"]).assign_coords(years)
+    growth = xr.DataArray(RETROFIT_DEMAND_GROWTH, dims="year_op", coords={"year_op": years["year_op"]})
+    out["demand"] = p.demand.isel(year_op=0, drop=True) * growth
+    for name, value in (("operation_year_duration", 8760.0), ("discount_rate", 0.0), ("discount_factor", 1.0)):
+        out[name] = ("year_op", np.full(2, value))
+    for module, first in base_cost.items():
+        tech, k = f"{module}_tech", p.sizes[f"{module}_tech"]
+        out[f"{module}_end_of_life"] = ((tech, "year_inv"), np.tile(years["year_inv"] + 20.0, (k, 1)))
+        cost = (first + 0.1 * np.arange(k))[:, None, None] * np.ones((k, 3, 3))
+        out[f"{module}_annuity_cost"] = ((tech, "year_dec", "year_inv"), cost)
+    return out
+
+
+def _retrofit_data(module: str, pair: tuple[str, str], year_ret: list[int]) -> dict:
+    """The retrofit parameters of ``module`` for the one pair ``(from, to)``: a cheap transfer at ``year_ret``."""
+    name, years = f"retrofit_{module}", np.array(year_ret, dtype="int64")
+    return {
+        name: np.array(True),
+        f"{name}_tech_from": ([f"{name}_pair"], np.array([pair[0]])),
+        f"{name}_tech_to": ([f"{name}_pair"], np.array([pair[1]])),
+        f"{name}_life_span": np.array(20.0),
+        f"{name}_finance_rate": np.array(0.0),
+        f"{name}_early_decommissioning": np.array(False),
+        f"{name}_annuity_perfect_foresight": np.array(False),
+        f"{name}_invest_cost": np.array(1.0),
+        f"{name}_ret_ratio": np.array(1.0),
+        f"{name}_eligible_share": np.array(1.0),
+        f"{name}_power_capacity_investment_min": np.array(np.nan),
+        f"{name}_power_capacity_investment_max": np.array(np.nan),
+        f"{name}_annuity_cost": (("year_dec", "year_ret"), np.full((3, years.size), 0.3)),
+        f"{name}_end_of_life": (("year_ret",), (20 + years).astype("int64")),
+    }
+
+
+def _with_retrofit(p: xr.Dataset, module: str, pair: tuple[str, str]) -> xr.Dataset:
+    pair_dim = f"retrofit_{module}_pair"
+    year_ret = np.array(RETROFIT_YEARS["year_ret"], dtype="int64")
+    return p.assign_coords({pair_dim: [f"{pair[0]}_to_{pair[1]}"], "year_ret": year_ret}).assign(
+        _retrofit_data(module, pair, RETROFIT_YEARS["year_ret"])
+    )
+
+
+def retrofit_conversion_block_dataset() -> xr.Dataset:
+    """
+    A conversion retrofit ``old`` -> ``new`` that transfers capacity: ``old`` hourly, ``new`` on blocks of 2 h.
+
+    One area, ``idle`` and ``steel``, steel demand (2, 3, 1, 3, 2, 2) growing by 1.6 in the second year (2030 and 2040).
+    ``old`` (cheap, buildable in 2020 only, decommissioned in 2040) serves 2030; ``new`` (cheaper to run) cannot be
+    invested in and gets its capacity only by retrofit of ``old`` in 2040, when the retrofit (annuity 0.3) is far
+    cheaper than the hourly ``backup`` (variable cost 30), which keeps steel hourly. The reverse direction is the same
+    dataset with ``with_blocks(p, conversion={"old": 2})``. Distinct costs and a priced spillage: a unique optimum.
+    """
+    p = hand_toy([1.0] * 6, [2.0, 3.0, 1.0, 3.0, 2.0, 2.0], s=3.0)
+    p = p.isel(conversion_tech=[0, 0, 0]).assign_coords(conversion_tech=["old", "new", "backup"])
+    p = _on_retrofit_years(p, {"conversion": 1.0})
+    p["conversion_factor"] = (("conversion_tech", "resource"), [[0.0, 1.0]] * 3)
+    p["conversion_variable_cost"] = ("conversion_tech", [1.0, 0.6, 30.0])
+    p["conversion_fixed_cost"] = ("conversion_tech", [2.0, 2.5, 3.0])
+    p["conversion_power_capacity_max"] = (("area", "conversion_tech"), [[np.nan] * 3])
+    p["conversion_power_capacity_min"] = (("area", "conversion_tech"), [[0.0] * 3])
+    invest = np.full((1, 3, 3), np.nan)
+    invest[0, 0, 1:] = 0.0  # old: the 2020 vintage only
+    invest[0, 1, :] = 0.0  # new: retrofit only
+    p["conversion_power_capacity_investment_max"] = (("area", "conversion_tech", "year_inv"), invest)
+    p["conversion_life_span"] = ("conversion_tech", np.full(3, 20.0))
+    p = _with_retrofit(p, "conversion", ("old", "new"))
+    return with_blocks(p, conversion={"new": 2})
+
+
+def retrofit_combined_block_dataset() -> xr.Dataset:
+    """
+    A combined retrofit ``electric_boiler`` -> ``boiler_block`` that transfers capacity: source hourly, target on 2 h.
+
+    ``combined_toy`` over 6 steps and the retrofit years: ``electric_boiler`` is buildable in 2020 only, ``boiler_block``
+    (cheaper to run) only by retrofit in 2040, ``steady_kiln`` is pinned to zero; the hourly ``heater`` covers what the
+    boilers cannot. The reverse direction: ``with_blocks(p, combined={"electric_boiler": 2})``.
+    """
+    p = _on_retrofit_years(combined_toy([1.0] * 6), {"combined": 3.0, "conversion": 0.0})
+    p["combined_power_capacity_max"] = (("area", "combined_tech"), [[np.nan, np.nan, 0.0]] * 2)
+    invest = np.full((2, 3, 3), np.nan)
+    invest[:, 0, 1:] = 0.0  # electric_boiler: the 2020 vintage only
+    invest[:, 1, :] = 0.0  # boiler_block: retrofit only
+    p["combined_power_capacity_investment_max"] = (("area", "combined_tech", "year_inv"), invest)
+    p = _with_retrofit(p, "combined", ("electric_boiler", "boiler_block"))
+    return with_blocks(p, combined={"boiler_block": 2})
+
+
+# --- the uniform coarse step with net_import and carbon (T3(c)), operating conditions (section 16.5) ---
+
+
+def t3c_dataset() -> xr.Dataset:
+    """``coarse_step_dataset(4, 24, net_import=True, carbon=True)``: window, ramps, both yearly maxima and the tax bind."""
+    return coarse_step_dataset(4, 24, net_import=True, carbon=True)
+
+
+def t3c_ratio_dataset() -> xr.Dataset:
+    """
+    ``t3c_dataset`` without carbon, with the ratios of ``flexdem_ratio_dataset`` (the ratio rows bind, the ramps are off).
+
+    Carbon is left out: with the ratios the optimum has two modes of a combined technology at the same cost (the
+    objective is unique, the emissions are not), so the yearly totals would not compare.
+    """
+    return _ratio_cells(coarse_step_dataset(4, 24, net_import=True))
+
+
+def conditions_block_dataset() -> xr.Dataset:
+    """
+    The hand toy on 8 steps with steel forced to 2 h, built so that the dual of each coarse row is unique.
+
+    The furnace (on blocks of 2 h) is capped at 1 MW and steel may be shed at 7 per MWh: blocks that ask for more than 2 MWh (steps
+    (3, 3) and (1.5, 1.5)) pay the shedding cost at the margin, the others (steps (0.5, 0.7) and (0.2, 0.4)) the
+    furnace's variable cost, so the coarse prices are 7n, vn, 7n, vn (n = operation_year_normalization).
+    """
+    p = hand_toy([1.0] * 8, [3.0, 3.0, 0.5, 0.7, 1.5, 1.5, 0.2, 0.4])
+    p["conversion_power_capacity_max"] = (("area", "conversion_tech"), [[1.0]])
+    p["load_shedding_max_capacity"] = ("resource", [0.0, np.nan])
+    p["load_shedding_cost"] = ("resource", [0.0, 7.0])
+    return with_blocks(p, conversion={"furnace": 2}, resource={"steel": 2})
+
+
+def net_import_expected_conditions_dataset() -> xr.Dataset:
+    """
+    ``coarse_step_dataset(4, 24, net_import=True)`` under two conditions (weights 0.4 and 0.6) with both yearly maxima on the expectation.
+
+    The second condition has import prices 1.5 times and export prices 0.8 times the first one's, so that the
+    conditions import and export differently; ``net_import_max_yearly_energy_import_expected`` and ``..._export_expected`` are on.
+    """
+    p = coarse_step_dataset(4, 24, net_import=True)
+    p = with_conditions(
+        p,
+        [0.4, 0.6],
+        net_import_import_price=[p.net_import_import_price, 1.5 * p.net_import_import_price],
+        net_import_export_price=[p.net_import_export_price, 0.8 * p.net_import_export_price],
+    )
+    return p.assign(
+        net_import_max_yearly_energy_import_expected=np.array(True), net_import_max_yearly_energy_export_expected=np.array(True)
+    )
