@@ -39,6 +39,10 @@ def add_carbon(
             will be updated with carbon-specific costs.
         operation_year_normalization (float):
             Normalization factor for operational year durations.
+        tb (pommes.utils.TimeBlocks, optional):
+            Block lengths and maps of the dataset, computed once by
+            ``build_model`` (``time_blocks(model_parameters)`` when None).
+            Accepted for the other modules' signature; not read yet.
 
     Returns:
         linopy.Model:

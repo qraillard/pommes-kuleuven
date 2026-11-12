@@ -104,3 +104,75 @@ def solved(m, name: str) -> xr.DataArray:
         da = da.dropna(tech, how="all")
     lead = [d for d in ("area", *techs) if d in da.dims]
     return da.transpose(*lead, ...)
+
+
+def hand_toy(
+    dt: list[float],
+    steel_demand: list[float],
+    a: float = 10.0,
+    v: float = 1.0,
+    s: float = 3.0,
+) -> xr.Dataset:
+    """
+    The hand toy of section 16.1: one furnace makes steel, nothing else.
+
+    One area, resources ``idle`` and ``steel``, one ``year_op``, one
+    conversion tech ``furnace`` (steel factor 1, no input), fixed cost ``a``
+    per MW, variable cost ``v`` per MWh, spillage cost ``s``, steel shedding
+    capped at 0, no invest cost, no discounting: the objective is exactly
+    ``a * cap + n * (v * production + s * spill)`` with ``n = toy_n(p)``.
+    """
+    from pommes.model.data_validation import ref_inputs
+
+    n = len(dt)
+    year = np.array([2030], dtype="int64")
+    year_inv, year_dec = np.array([2020]), np.array([2040])
+    ds = xr.Dataset(
+        coords=dict(
+            area=["a"],
+            hour=np.arange(n, dtype="int64"),
+            resource=["idle", "steel"],
+            conversion_tech=["furnace"],
+            year_dec=year_dec,
+            year_inv=year_inv,
+            year_op=year,
+        )
+    )
+    ds["conversion"] = True
+    ds["time_step_duration"] = ("hour", np.array(dt, dtype="float64"))
+    ds["operation_year_duration"] = ("year_op", [8760.0])
+    ds["operation_day_duration"] = np.array(24, dtype="int64")
+    ds["discount_rate"] = ("year_op", [0.0])
+    ds["discount_factor"] = ("year_op", [1.0])
+    demand = np.zeros((1, n, 2, 1))
+    demand[0, :, 1, 0] = steel_demand
+    ds["demand"] = (("area", "hour", "resource", "year_op"), demand)
+    ds["load_shedding_max_capacity"] = ("resource", [np.nan, 0.0])
+    ds["load_shedding_cost"] = ("resource", [0.0, 0.0])
+    ds["spillage_max_capacity"] = ("resource", [np.nan, np.nan])
+    ds["spillage_cost"] = ("resource", [0.0, s])
+    one = ("conversion_tech", [1.0])
+    ds["conversion_factor"] = (("conversion_tech", "resource"), [[0.0, 1.0]])
+    ds["conversion_variable_cost"] = ("conversion_tech", [v])
+    ds["conversion_fixed_cost"] = ("conversion_tech", [a])
+    ds["conversion_invest_cost"] = ("conversion_tech", [0.0])
+    ds["conversion_emission_factor"] = ("conversion_tech", [0.0])
+    ds["conversion_power_capacity_max"] = (("area", "conversion_tech"), [[np.nan]])
+    ds["conversion_power_capacity_min"] = (("area", "conversion_tech"), [[0.0]])
+    ds["conversion_life_span"] = ("conversion_tech", [20.0])
+    ds["conversion_end_of_life"] = (("conversion_tech", "year_inv"), [[2040.0]])
+    ds["conversion_annuity_cost"] = (
+        ("conversion_tech", "year_dec", "year_inv"),
+        [[[0.0]]],
+    )
+    ds["conversion_early_decommissioning"] = np.array(False)
+    ds["annuity_full_life"] = np.array(False)
+    for name, spec in ref_inputs.items():
+        if name not in ds.variables:
+            ds[name] = np.array(spec["default"], dtype=spec["type"])
+    return ds
+
+
+def toy_n(p: xr.Dataset) -> float:
+    """``operation_year_normalization`` of ``p`` (year duration over horizon)."""
+    return float(p.operation_year_duration.item() / p.time_step_duration.sum())

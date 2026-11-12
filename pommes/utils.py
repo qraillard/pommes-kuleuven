@@ -1015,8 +1015,8 @@ def change_resolution(expr, tb: TimeBlocks, src: int | None, dst: int | None):
     to hourly and coarser to finer blocks broadcast the duration share.
     """
     if src == dst:
-        return expr
-    if src is None:
+        out = expr
+    elif src is None:
         group = tb.block_of_hour[dst]
         _check_group(group, None)
         out = expr.groupby(group).sum()
@@ -1090,3 +1090,34 @@ def add_to_balances(adequacy, expr, tb: TimeBlocks, src: int | None = None) -> N
     assert sorted(routed) == sorted(
         expr.indexes["resource"]
     ), "resource not routed exactly once"
+
+
+def check_block_dims(m) -> None:
+    """
+    H5: no term carries a dimension its row lacks, no object mixes resolutions.
+
+    Raises ``RuntimeError`` naming the object when a constraint's ``vars``
+    dims are not within its labels' dims plus ``_term``, or when a variable
+    or a constraint (labels or vars) carries ``hour`` together with a
+    ``time_block_*`` dimension, or two different ``time_block_*`` dimensions.
+    Reads dimension names only.
+    """
+    for kind, items in (("variable", m.variables), ("constraint", m.constraints)):
+        for name in items:
+            obj = items[name]
+            dims = [set(obj.labels.dims)]
+            if kind == "constraint":
+                extra = set(obj.vars.dims) - set(obj.labels.dims) - {"_term"}
+                if extra:
+                    raise RuntimeError(
+                        f"{kind} {name}: terms carry {sorted(extra)}, "
+                        f"which its rows lack (H5)."
+                    )
+                dims.append(set(obj.vars.dims))
+            for d in dims:
+                blocks = {x for x in d if x.startswith("time_block_")}
+                if blocks and ("hour" in d or len(blocks) > 1):
+                    raise RuntimeError(
+                        f"{kind} {name}: dimensions {sorted(d)} mix "
+                        f"resolutions (H5)."
+                    )

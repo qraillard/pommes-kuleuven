@@ -2,6 +2,7 @@
 
 import dataclasses
 import warnings
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -32,7 +33,7 @@ def tb_of(hours=8, steps=(1.0,), **resource):
     return time_blocks(p)
 
 
-def hourly_expr(tb, extra=None):
+def hourly_expr(tb):
     """``1 * x`` over the hours; returns (model, variable, expression)."""
     m = Model()
     hours = tb.block_of_hour[next(iter(tb.block_of_hour))]["hour"]
@@ -129,6 +130,33 @@ def test_two_d_group_is_refused():
     _, _, e = hourly_expr(tb)
     with pytest.raises(AssertionError):
         change_resolution(e, bad, None, 2)
+
+
+@pytest.mark.parametrize("src,dst", [(None, 2), (4, None), (4, 2), (2, 4)])
+def test_two_d_group_is_refused_on_every_branch(src, dst):
+    tb = tb_of(hours=8, steel=4, ore=2)
+    key = dst if src is None else (dst if dst is not None and dst > src else src)
+    g = tb.block_of_hour[key]
+    bad = dataclasses.replace(
+        tb,
+        block_of_hour={
+            **tb.block_of_hour,
+            key: xr.concat([g, g], "operating_condition")
+            .transpose("hour", "operating_condition")
+            .rename(g.name),
+        },
+    )
+    _, _, e = hourly_expr(tb) if src is None else block_expr(tb, src)
+    with pytest.raises(AssertionError):
+        change_resolution(e, bad, src, dst)
+
+
+def test_identity_also_refuses_a_leftover_coordinate():
+    tb = tb_of(hours=4, steel=2)
+    _, _, e = hourly_expr(tb)
+    e = e.assign_coords(label=("hour", list("abcd")))
+    with pytest.raises(AssertionError):
+        change_resolution(e, tb, None, None)
 
 
 def test_leftover_coordinate_is_refused():
@@ -269,3 +297,16 @@ def test_solved_reads_area_and_tech_first(parameters):
     m.solve(solver_name="highs")
     da = solved(m, "operation_conversion_power")
     assert da.dims[:2] == ("area", "conversion_tech")
+
+
+def test_solved_keeps_values_and_drops_all_nan_techs():
+    da = xr.DataArray(
+        np.array([[1.0, 2.0], [np.nan, np.nan], [3.0, np.nan]]),
+        dims=("conversion_tech", "hour"),
+        coords={"conversion_tech": ["a", "b", "c"], "hour": [0, 1]},
+    ).expand_dims(area=["x"])
+    m = SimpleNamespace(solution={"v": da.transpose("hour", "conversion_tech", "area")})
+    out = solved(m, "v")
+    assert out.dims[:2] == ("area", "conversion_tech")
+    assert list(out.conversion_tech.values) == ["a", "c"]  # b: all NaN
+    np.testing.assert_array_equal(out.values[0], [[1.0, 2.0], [3.0, np.nan]])

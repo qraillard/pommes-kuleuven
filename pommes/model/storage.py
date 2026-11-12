@@ -42,6 +42,11 @@ def add_storage(
         operation_adequacy_constraint (linopy.Constraint):
             Constraint ensuring operational adequacy, enforcing supply-demand
             balance, which will be updated with storage-related contributions.
+        tb (pommes.utils.TimeBlocks, optional):
+            Block lengths and maps of the dataset, computed once by
+            ``build_model`` (``time_blocks(model_parameters)`` when None).
+            Without block inputs it is inactive and the statements are
+            today's.
 
     Returns:
         linopy.Model:
