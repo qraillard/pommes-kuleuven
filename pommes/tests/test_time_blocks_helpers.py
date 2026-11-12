@@ -280,7 +280,8 @@ def test_build_model_raises_time_blocks_refusals(parameters):
 
 
 def test_build_model_warns_once_and_check_inputs_stays_silent(parameters):
-    p = with_blocks(parameters, conversion={"ocgt": 4})
+    # carbon off: with a block technology it is refused until Task 9
+    p = with_blocks(parameters.assign(carbon=np.array(False)), conversion={"ocgt": 4})
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         p = check_inputs(p)
@@ -310,3 +311,139 @@ def test_solved_keeps_values_and_drops_all_nan_techs():
     assert out.dims[:2] == ("area", "conversion_tech")
     assert list(out.conversion_tech.values) == ["a", "c"]  # b: all NaN
     np.testing.assert_array_equal(out.values[0], [[1.0, 2.0], [3.0, np.nan]])
+
+
+def _block_source_case(steps, src, dst, resource):
+    """A block variable on ``src``-hour blocks routed by ``add_to_balances`` (uneven steps)."""
+    lengths = {"steel": dst} if src == dst else {"steel": dst, "ore": src}
+    tb = tb_of(hours=8, steps=steps, **lengths)
+    m = Model()
+    y = m.add_variables(
+        coords=[
+            tb.duration[src][block_dim(src)].to_index(),
+            pd_index("resource", resource),
+        ],
+        name="y",
+    )
+    return tb, m, y
+
+
+def _y_rows(con, y):
+    """Rows of ``con`` restricted to the labels of ``y``."""
+    mine = {int(v) for v in y.labels.values.ravel()}
+    return [{k: v for k, v in row.items() if k in mine} for row in rows(con.lhs)]
+
+
+STEPS = (1, 1, 2)  # 8 steps: blocks of 4 h hold 3, 3 and 2 steps (the last lasts 2 h)
+
+
+def test_block_source_routes_to_both_balances():
+    """M2: a 4 h block source reaches an hourly balance by share and a 4 h balance by identity."""
+    tb, m, y = _block_source_case(STEPS, 4, 4, ["electricity", "steel"])
+    hourly = constraint(m, "operation_adequacy_constraint", hour=range(8), resource=["electricity"])
+    coarse = constraint(
+        m,
+        "operation_adequacy_block_4h_constraint",
+        **{block_dim(4): range(3), "resource": ["steel"]},
+    )
+    add_to_balances(hourly, 1 * y, tb, src=4)
+    share = [row[next(iter(row))] for row in _y_rows(hourly, y)]
+    assert share == pytest.approx([1 / 4, 1 / 4, 2 / 4, 1 / 4, 1 / 4, 2 / 4, 1 / 2, 1 / 2])
+    labels = y.labels.sel(resource="electricity").values
+    assert [list(r) for r in _y_rows(hourly, y)] == [[int(labels[b])] for b in [0, 0, 0, 1, 1, 1, 2, 2]]
+    steel = y.labels.sel(resource="steel").values
+    assert _y_rows(coarse, y) == [{int(steel[b]): 1.0} for b in range(3)]
+
+
+def test_block_source_reaches_a_finer_balance_by_share():
+    """M2: a 4 h source into a 2 h balance gives each 2 h block its share of the 4 h block."""
+    tb, m, y = _block_source_case(STEPS, 4, 2, ["steel"])
+    coarse = constraint(
+        m,
+        "operation_adequacy_block_2h_constraint",
+        **{block_dim(2): range(5), "resource": ["steel"]},
+    )
+    add_to_balances(coarse, 1 * y, tb, src=4)
+    lab = y.labels.sel(resource="steel").values
+    assert _y_rows(coarse, y) == [
+        {int(lab[0]): 0.5},
+        {int(lab[0]): 0.5},
+        {int(lab[1]): 0.5},
+        {int(lab[1]): 0.5},
+        {int(lab[2]): 1.0},
+    ]
+
+
+def test_block_source_reaches_a_coarser_balance_by_sum():
+    """M2: a 2 h source into a 4 h balance sums the 2 h blocks of each 4 h block."""
+    tb, m, y = _block_source_case(STEPS, 2, 4, ["steel"])
+    coarse = constraint(
+        m,
+        "operation_adequacy_block_4h_constraint",
+        **{block_dim(4): range(3), "resource": ["steel"]},
+    )
+    add_to_balances(coarse, 1 * y, tb, src=2)
+    lab = y.labels.sel(resource="steel").values
+    assert _y_rows(coarse, y) == [
+        {int(lab[0]): 1.0, int(lab[1]): 1.0},
+        {int(lab[2]): 1.0, int(lab[3]): 1.0},
+        {int(lab[4]): 1.0},
+    ]
+
+
+@pytest.mark.parametrize("src,dst", [(None, 2), (4, None), (4, 2), (2, 4)])
+def test_a_reordered_axis_is_refused(src, dst):
+    """M1: linopy's groupby and isel are positional, so a reversed axis must not pass."""
+    tb = tb_of(hours=8, steel=4, ore=2)
+    m = Model()
+    axis = (
+        tb.block_of_hour[dst]["hour"].to_index()
+        if src is None
+        else tb.duration[src][block_dim(src)].to_index()
+    )
+    x = m.add_variables(coords=[axis[::-1]], name="x")
+    with pytest.raises(AssertionError, match="axis"):
+        change_resolution(1 * x, tb, src, dst)
+
+
+def test_dead_slices_are_not_summed_into_a_coarse_row():
+    """I1: a resource that no technology touches gets no dead terms from an hourly source."""
+    tb = tb_of(hours=4, steel=2)
+    m = Model()
+    hour = pd_index("hour", range(4))
+    res = pd_index("resource", ["electricity", "steel"])
+    y = m.add_variables(coords=[hour, res], name="y", mask=xr.DataArray(
+        [[True, False]] * 4, dims=("hour", "resource"), coords={"hour": range(4), "resource": ["electricity", "steel"]}
+    ))
+    hourly = constraint(m, "operation_adequacy_constraint", hour=range(4), resource=["electricity"])
+    coarse = constraint(
+        m, "operation_adequacy_block_2h_constraint", **{block_dim(2): range(2), "resource": ["steel"]}
+    )
+    before = coarse.lhs.vars.sizes["_term"]
+    add_to_balances(hourly, 1 * y, tb)
+    assert coarse.lhs.vars.sizes["_term"] == before  # steel is all -1 in y: nothing added
+    assert hourly.lhs.vars.sizes["_term"] == 2  # the electricity slice is routed
+
+
+def test_a_constant_on_a_dead_slice_is_kept():
+    """I1: an all-masked slice with a nonzero constant still moves the right-hand side."""
+    tb = tb_of(hours=4, steel=2)
+    m = Model()
+    hour = pd_index("hour", range(4))
+    res = pd_index("resource", ["electricity", "steel"])
+    y = m.add_variables(coords=[hour, res], name="y", mask=xr.DataArray(
+        [[True, False]] * 4, dims=("hour", "resource"), coords={"hour": range(4), "resource": ["electricity", "steel"]}
+    ))
+    hourly = constraint(m, "operation_adequacy_constraint", hour=range(4), resource=["electricity"])
+    coarse = constraint(
+        m, "operation_adequacy_block_2h_constraint", **{block_dim(2): range(2), "resource": ["steel"]}
+    )
+    add_to_balances(hourly, 1 * y + 3, tb)
+    assert coarse.rhs.values.ravel().tolist() == [-6.0, -6.0]  # 3 per hour, 2 hours per block
+
+
+def test_carbon_with_a_block_technology_is_refused(parameters):
+    """M3: until the carbon rows read the block groups, carbon on is refused."""
+    for lengths in ({"combined": {"electric_boiler": 2}}, {"conversion": {"ocgt": 2}}):
+        with pytest.raises(ValueError, match="carbon"):
+            build_model(with_blocks(parameters, **lengths))

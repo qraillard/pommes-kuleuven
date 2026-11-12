@@ -194,3 +194,26 @@ def test_no_sel_without_a_coarse_resource(parameters, monkeypatch):
     shed = m.variables["operation_load_shedding_power"]
     assert list(shed.labels.indexes["resource"]) == list(p.resource.values)
     assert_t0(p)
+
+
+def _with_untouched_resource(p, name="ore"):
+    """``p`` plus a resource that no technology touches (no demand, spillage priced)."""
+    q = p.reindex(resource=[*p.resource.values, name])
+    q["demand"] = q.demand.fillna(0.0)
+    q["conversion_factor"] = q.conversion_factor.fillna(0.0)
+    q["load_shedding_max_capacity"] = q.load_shedding_max_capacity.fillna(0.0)
+    q["load_shedding_cost"] = q.load_shedding_cost.fillna(0.0)
+    q["spillage_cost"] = q.spillage_cost.fillna(1.0)
+    return q
+
+
+def test_a_forced_resource_that_nothing_touches_gets_no_dead_terms():
+    """I1: the hourly conversion output has a masked slice on the forced resource; it adds no term."""
+    p = _with_untouched_resource(hand_toy_a())
+    hourly = solve(p)
+    m = solve(with_blocks(p, resource={"ore": 2}))
+    block = m.constraints[BLOCK]
+    assert list(block.labels.indexes["resource"]) == ["ore"]
+    # shedding and spillage only: no term of the hourly conversion variables
+    assert block.vars.sizes["_term"] == 2
+    assert m.objective.value == pytest.approx(hourly.objective.value, rel=1e-9)

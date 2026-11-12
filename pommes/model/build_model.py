@@ -120,6 +120,16 @@ def build_model(model_parameters: Dataset) -> Model:
     """
     p = model_parameters
     tb = time_blocks(p)
+    if "carbon" in p.keys() and p.carbon and any(
+        np.isfinite(a.values).any() for a in tb.tech_length.values()
+    ):
+        # interim (Task 9): the carbon rows read the hourly power only
+        raise ValueError(
+            "carbon with a block conversion or combined technology is not "
+            "supported yet (the carbon support of Task 9 of the multi-"
+            "resolution plan is missing): set carbon to False or drop the "
+            "block lengths."
+        )
 
     operation_year_normalization = (
         p.operation_year_duration / p.time_step_duration.sum("hour")

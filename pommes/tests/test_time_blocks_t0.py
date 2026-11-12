@@ -10,6 +10,7 @@ from pommes.tests.dataset_nnodes import build_nnode_parameters
 from pommes.tests.test_flexdem import _with_defaults, _with_flexdem
 from pommes.tests.time_blocks_helper import (
     assert_t0,
+    combined_toy,
     hand_toy,
     lp_text,
     process_hourly,
@@ -76,3 +77,10 @@ def test_t0_length_on_a_module_that_is_off(parameters, module):
 
 def test_t0_balances():
     assert_t0(hand_toy([1.0] * 4, [0, 2, 0, 2]))
+
+
+def test_t0_combined_with_block_tech_and_nan_lengths():
+    """C11: a second combined tech, finite ramps and a constant-operation tech, every length NaN."""
+    p = combined_toy([1.0] * 10)
+    assert p.combined_tech.size == 3 and float(p.combined_ramp_up.min()) == 0.0
+    assert_t0(p)

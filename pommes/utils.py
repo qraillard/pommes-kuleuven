@@ -1006,6 +1006,13 @@ def _check_group(group: DataArray, T_L: str | None) -> None:
     )
 
 
+def _check_axis(expr, dim: str, ref: pd.Index) -> None:
+    """M1: linopy's groupby and ``isel`` act by position, so the axis must be the map's."""
+    assert expr.indexes[dim].equals(ref), (
+        f"{dim} of the expression is not the time map's axis"
+    )
+
+
 def change_resolution(expr, tb: TimeBlocks, src: int | None, dst: int | None):
     """
     Energy-per-step expression from resolution ``src`` to ``dst`` (section 7.1).
@@ -1019,6 +1026,7 @@ def change_resolution(expr, tb: TimeBlocks, src: int | None, dst: int | None):
     elif src is None:
         group = tb.block_of_hour[dst]
         _check_group(group, None)
+        _check_axis(expr, "hour", group.indexes["hour"])
         out = expr.groupby(group).sum()
     elif dst is not None and dst > src:  # coarser row: sum its blocks
         group = (
@@ -1027,6 +1035,7 @@ def change_resolution(expr, tb: TimeBlocks, src: int | None, dst: int | None):
             .drop_vars("hour")
         )
         _check_group(group, block_dim(src))
+        _check_axis(expr, block_dim(src), tb.duration[src].indexes[block_dim(src)])
         out = expr.groupby(group).sum()
     else:  # hourly or finer row: broadcast the share of the source block
         t_src = block_dim(src)
@@ -1040,6 +1049,7 @@ def change_resolution(expr, tb: TimeBlocks, src: int | None, dst: int | None):
             )
             row_duration = tb.duration[dst]
         _check_group(idx, "hour" if dst is None else block_dim(dst))
+        _check_axis(expr, t_src, tb.duration[src].indexes[t_src])
         w = (
             row_duration
             / tb.duration[src].isel({t_src: idx}).drop_vars(t_src)
@@ -1072,7 +1082,20 @@ def add_to_balances(adequacy, expr, tb: TimeBlocks, src: int | None = None) -> N
         if not res:
             continue
         routed += res
-        part = change_resolution(expr.sel(resource=res), tb, src, dst)
+        sub = expr.sel(resource=res)
+        if src != dst:
+            # I1: a slice with no live term and no constant adds nothing but dead terms
+            # (a bare variable has labels and no constant)
+            labels = sub.vars if hasattr(sub, "vars") else sub.labels
+            live = (labels != -1).any([d for d in labels.dims if d != "resource"])
+            if hasattr(sub, "const"):
+                live = live | (sub.const != 0).any(
+                    [d for d in sub.const.dims if d != "resource"]
+                )
+            if not live.any():
+                continue
+            sub = sub.sel(resource=live.indexes["resource"][live.values])
+        part = change_resolution(sub, tb, src, dst)
         con = (
             adequacy
             if dst is None
@@ -1121,3 +1144,34 @@ def check_block_dims(m) -> None:
                         f"{kind} {name}: dimensions {sorted(d)} mix "
                         f"resolutions (H5)."
                     )
+
+
+def check_group_coord(obj, ref: pd.Index, dim: str) -> None:
+    """
+    H1/H2 guard: ``obj`` (a variable or a constraint) carries the group's own
+    coordinate along ``dim``, order included.
+
+    Raises ``RuntimeError`` otherwise: a partner restricted in another order
+    or a forgotten restriction would be paired by position, or grow the group.
+    """
+    if not obj.indexes[dim].equals(ref):
+        raise RuntimeError(
+            f"{getattr(obj, 'name', obj)}: {dim} is not the group's "
+            f"coordinate (H1/H2): {list(obj.indexes[dim])} != {list(ref)}."
+        )
+
+
+def check_partition(
+    parts: dict[int | None, pd.Index], full: pd.Index
+) -> dict[int | None, pd.Index]:
+    """
+    The groups partition the full index (C11): disjoint, union equal to it.
+
+    Raises ``AssertionError`` otherwise (H10). Returns the non-empty parts,
+    in order, so that an empty group is never built.
+    """
+    live = {key: part for key, part in parts.items() if len(part)}
+    members = [x for part in live.values() for x in part]
+    assert len(members) == len(set(members)), "groups overlap"
+    assert set(members) == set(full), "groups do not cover the full index"
+    return live

@@ -3,6 +3,7 @@
 import itertools
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 from linopy import Constraint, Model
 from xarray import Dataset
@@ -11,11 +12,306 @@ from pommes.model.annuity import annuity_full_life, full_life_window
 from pommes.utils import (
     TimeBlocks,
     add_to_balances,
+    block_dim,
+    check_group_coord,
+    check_partition,
     condition_coords,
     condition_mask,
     expected_over_conditions,
     time_blocks,
 )
+
+
+def combined_groups(
+    p: Dataset, tb: TimeBlocks, keep: list[str] | None = None
+) -> list[tuple[int | None, Dataset, pd.Index | None]]:
+    """
+    The groups ``(L, p_g, idx_g)`` of the combined module (section 5.1).
+
+    ``L`` is None for the hourly technologies, else a block length (ascending);
+    a group without technology is left out. Dense: ``p_g`` is
+    ``p.sel(combined_tech=techs_g)`` and ``idx_g`` is None (no unit
+    dimension). Without a block length on a combined technology (T0 included)
+    there is one group: ``(None, p, None)``, ``p`` itself. ``keep`` (the
+    ``combined_*`` names a reader needs) only matters in the sparse engine,
+    where it is applied before the gather.
+    """
+    lengths = tb.tech_length["combined"].values
+    if not (tb.active and np.isfinite(lengths).any()):
+        return [(None, p, None)]
+    keys = [None, *sorted({int(x) for x in lengths[np.isfinite(lengths)]})]
+    parts = check_partition(
+        {L: pd.Index(tb.techs("combined", L)) for L in keys},
+        p.indexes["combined_tech"],
+    )
+    return [
+        (L, p.sel(combined_tech=list(part)), None) for L, part in parts.items()
+    ]
+
+
+def _net_generation_mask(p: Dataset):
+    """Where the net generation of a group exists (a nonzero factor in some mode)."""
+    return condition_mask(
+        p,
+        (np.isfinite(p.combined_factor) * (p.combined_factor != 0)).any(
+            [dim for dim in ["mode"] if dim in p.combined_factor.dims]
+        ),
+    )
+
+
+def _group_variables(m: Model, p: Dataset, tb: TimeBlocks, L: int | None):
+    """Power and net generation of a group, on its own technologies and time axis."""
+    prefix = (
+        "operation_combined_" if L is None else f"operation_combined_block_{L}h_"
+    )
+    time = p.hour if L is None else tb.duration[L][block_dim(L)]
+    power = m.add_variables(
+        name=f"{prefix}power",
+        lower=0,
+        coords=[
+            p.area,
+            p.combined_tech,
+            p.mode,
+            time,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(p),
+    )
+    net_generation = m.add_variables(
+        name=f"{prefix}net_generation",
+        coords=[
+            p.area,
+            p.combined_tech,
+            time,
+            p.resource,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=_net_generation_mask(p),
+    )
+    return power, net_generation
+
+
+class _CombinedRows:
+    """
+    The operational rows of one combined group (sections 5.3, 6.2, 6.3).
+
+    ``L`` is None for the hourly group, whose rows are today's; else the rows
+    are the hourly rows on the block axis ``T = time_block_{L}h``: the step
+    ``D`` is the block duration, the ramp divisor ``D0`` the duration of its
+    first step, and ``first`` replaces ``hour != hour[0]``. ``capacity`` and
+    ``costs`` are the year-level variables restricted to the group;
+    ``p_g`` supplies every parameter (H7). After each row of a split module
+    the group's coordinate is checked (H1/H2).
+    """
+
+    def __init__(
+        self, m, p_g, idx_g, tb, L, power, net_generation, capacity, costs, norm
+    ):
+        self.m, self.p, self.power = m, p_g, power
+        self.net_generation, self.capacity = net_generation, capacity
+        self.costs, self.norm = costs, norm
+        self.prefix = (
+            "operation_combined_"
+            if L is None
+            else f"operation_combined_block_{L}h_"
+        )
+        if L is None:
+            self.T = "hour"
+            self.D = self.D0 = p_g.time_step_duration
+            self.first = p_g.hour != p_g.hour[0]
+        else:
+            self.T = block_dim(L)
+            self.D, self.D0 = tb.duration[L], tb.first_step_duration[L]
+            self.first = tb.duration[L][self.T] != 0
+        self.guard = tb.active
+        self.dim, self.ref = "combined_tech", p_g.indexes["combined_tech"]
+
+    def add(self, constraint, name, mask=None):
+        """Add the row ``prefix + name``; check its coordinate in a split module."""
+        con = self.m.add_constraints(
+            constraint, name=f"{self.prefix}{name}", mask=mask
+        )
+        if self.guard:
+            check_group_coord(con, self.ref, self.dim)
+        return con
+
+    def limits(self):
+        """Power bounds, undefined modes, constant operation, ramps, mode-pair ramps."""
+        p, power, capacity = self.p, self.power, self.capacity
+        T, first = self.T, self.first
+        self.add(
+            power.sum("mode") - capacity * p.combined_max_load <= 0,
+            "power_max_constraint",
+            mask=condition_mask(p),
+        )
+        self.add(
+            power.sum("mode") - capacity * p.combined_min_load >= 0,
+            "power_min_constraint",
+            mask=condition_mask(p),
+        )
+        self.add(
+            power == 0,
+            # if combined_factor is not defined for a given mode, then the
+            # technology cannot operate under this mode
+            "power_undefined_mode",
+            mask=condition_mask(p, (p.combined_factor == 0).all(dim="resource")),
+        )
+
+        # TODO: must run in combined
+        # m.add_constraints(
+        #     operation_combined_power - operation_combined_power_capacity * p.combined_must_run
+        #     == 0,
+        #     name="operation_combined_must_run_constraint_equality",
+        #     mask=(p.combined_must_run.sum("mode") == 1),
+        # )
+        #
+        # m.add_constraints(
+        #     operation_combined_power - operation_combined_power_capacity * p.combined_must_run >= 0,
+        #     name="operation_combined_must_run_constraint_inequality",
+        #     mask=(0 < p.combined_must_run) * (p.combined_must_run < 1),
+        # )
+
+        # Operation - Combined ramping (no unit commitment: bounds are
+        # expressed directly against installed capacity, as there is no on/off
+        # state). Ramp applies to the total across modes, not each mode
+        # independently (else a 2-mode tech's aggregate output could ramp ~2x
+        # too fast).
+
+        combined_ramp_up = p.combined_ramp_up.min(
+            [dim for dim in ["mode"] if dim in p.combined_ramp_up.dims]
+        )
+        combined_ramp_down = p.combined_ramp_down.min(
+            [dim for dim in ["mode"] if dim in p.combined_ramp_down.dims]
+        )
+
+        combined_mode_ramp_up = p.combined_mode_ramp_up.min(
+            [dim for dim in ["mode"] if dim in p.combined_mode_ramp_up.dims]
+        )
+        combined_mode_ramp_down = p.combined_mode_ramp_down.min(
+            [dim for dim in ["mode"] if dim in p.combined_mode_ramp_down.dims]
+        )
+
+        # Constant operation (P_t = P_(t-1)) where the ramps are 0: equalities
+        # instead of the ramp inequalities, which are removed from the masks
+        # below. Aggregate ramps both 0: one equality on the sum over modes.
+        # If the mode ramps are both 0 too, one equality per mode instead (it
+        # fixes every mode, so the aggregate equality and the pairwise mode
+        # rows of these units are redundant and left out). A single 0 keeps
+        # the inequalities. The gates read the group's own parameters.
+        aggregate_constant = (combined_ramp_up == 0) * (combined_ramp_down == 0)
+        mode_constant = (
+            aggregate_constant
+            * (combined_mode_ramp_up == 0)
+            * (combined_mode_ramp_down == 0)
+        )
+
+        if (aggregate_constant * ~mode_constant).any():
+            self.add(
+                power.sum("mode") - power.sum("mode").shift({T: 1}) == 0,
+                "constant_operation_constraint",
+                mask=condition_mask(
+                    p, aggregate_constant * ~mode_constant * first
+                ),
+            )
+
+        if mode_constant.any():
+            self.add(
+                power - power.shift({T: 1}) == 0,
+                "mode_constant_operation_constraint",
+                mask=condition_mask(p, mode_constant * first),
+            )
+
+        self.add(
+            (power.sum("mode") - power.sum("mode").shift({T: 1})) / self.D0
+            - combined_ramp_up * capacity
+            <= 0,
+            "ramp_up_constraint",
+            mask=condition_mask(
+                p,
+                np.isfinite(combined_ramp_up) * ~aggregate_constant * first,
+            ),
+        )
+
+        self.add(
+            (power.sum("mode").shift({T: 1}) - power.sum("mode")) / self.D0
+            - combined_ramp_down * capacity
+            <= 0,
+            "ramp_down_constraint",
+            mask=condition_mask(
+                p,
+                np.isfinite(combined_ramp_down) * ~aggregate_constant * first,
+            ),
+        )
+
+        # Optional, opt-in: limits how fast the split between modes shifts,
+        # independent of the aggregate ramp above. Off by default (nan).
+        # Applied pairwise across all modes -- no new variable: power(mode_a)
+        # - power(mode_b) is a linear combination of the existing power
+        # variable.
+
+        for mode_a, mode_b in itertools.combinations(p.mode.values, 2):
+            combined_mode_balance = power.sel(mode=mode_a) - power.sel(
+                mode=mode_b
+            )
+
+            self.add(
+                (combined_mode_balance - combined_mode_balance.shift({T: 1}))
+                / self.D0
+                - combined_mode_ramp_up * capacity
+                <= 0,
+                f"mode_ramp_up_constraint_{mode_a}_{mode_b}",
+                mask=condition_mask(
+                    p,
+                    np.isfinite(combined_mode_ramp_up)
+                    * ~mode_constant
+                    * first,
+                ),
+            )
+
+            self.add(
+                (combined_mode_balance.shift({T: 1}) - combined_mode_balance)
+                / self.D0
+                - combined_mode_ramp_down * capacity
+                <= 0,
+                f"mode_ramp_down_constraint_{mode_a}_{mode_b}",
+                mask=condition_mask(
+                    p,
+                    np.isfinite(combined_mode_ramp_down)
+                    * ~mode_constant
+                    * first,
+                ),
+            )
+
+        # TODO: Ramp constraints for lag > 1 not implemented yet and for
+        #     storage also
+
+    def net_generation_def(self):
+        """Net generation (energy per step or per block) from power and factor."""
+        p = self.p
+        self.add(
+            -self.net_generation
+            + self.D * (p.combined_factor * self.power).sum(["mode"])
+            == 0,
+            "net_generation_def",
+            mask=_net_generation_mask(p),
+        )
+
+    def costs_def(self):
+        """Operational costs: variable cost on the energy, fixed cost on the capacity."""
+        p = self.p
+        self.add(
+            -self.costs
+            + self.norm
+            * (
+                p.combined_variable_cost * (self.D * self.power).sum(self.T)
+            ).sum("mode")
+            + p.combined_fixed_cost * self.capacity
+            == 0,
+            "costs_def",
+            mask=condition_mask(p),
+        )
 
 
 def add_combined(
@@ -210,6 +506,35 @@ def add_combined(
     m = model
     p = model_parameters
 
+    # Today's statements on p itself unless some combined tech has a block
+    # length: then the hourly techs and each block length form a group.
+    groups = combined_groups(p, tb)
+    blocked = groups[0][1] is not p
+    hourly = [g for g in groups if g[0] is None]
+    blocks = [g for g in groups if g[0] is not None]
+
+    def rows_of(L, p_g, idx_g, variables):
+        """The row object of a group, its partners restricted to its technologies (H1)."""
+
+        def restrict(var):
+            return (
+                var.sel(combined_tech=p_g.indexes["combined_tech"])
+                if blocked
+                else var
+            )
+
+        return _CombinedRows(
+            m,
+            p_g,
+            idx_g,
+            tb,
+            L,
+            *variables,
+            restrict(operation_combined_power_capacity),
+            restrict(operation_combined_costs),
+            operation_year_normalization,
+        )
+
     # ------------
     # Variables
     # ------------
@@ -222,39 +547,12 @@ def add_combined(
         coords=[p.area, p.combined_tech, p.year_op],
     )
 
-    operation_combined_power = m.add_variables(
-        name="operation_combined_power",
-        lower=0,
-        coords=[
-            p.area,
-            p.combined_tech,
-            p.mode,
-            p.hour,
-            p.year_op,
-            *condition_coords(p),
-        ],
-        mask=condition_mask(p),
-    )
+    # Operation - Combined power and intermediate variables (the hourly
+    # group's, in today's order)
 
-    # Operation - Combined intermediate variables
-
-    operation_combined_net_generation = m.add_variables(
-        name="operation_combined_net_generation",
-        coords=[
-            p.area,
-            p.combined_tech,
-            p.hour,
-            p.resource,
-            p.year_op,
-            *condition_coords(p),
-        ],
-        mask=condition_mask(
-            p,
-            (np.isfinite(p.combined_factor) * (p.combined_factor != 0)).any(
-                [dim for dim in ["mode"] if dim in p.combined_factor.dims]
-            ),
-        ),
-    )
+    if hourly:
+        _, p_h, idx_h = hourly[0]
+        hourly_variables = _group_variables(m, p_h, tb, None)
 
     # Planning - Combined
 
@@ -287,6 +585,9 @@ def add_combined(
         coords=[p.area, p.combined_tech, p.year_op],
     )
 
+    if hourly:
+        hourly_rows = rows_of(None, p_h, idx_h, hourly_variables)
+
     # ------------------
     # Objective function
     # ------------------
@@ -301,184 +602,17 @@ def add_combined(
 
     # Adequacy constraint
 
-    add_to_balances(
-        operation_adequacy_constraint,
-        operation_combined_net_generation.sum("combined_tech"),
-        tb,
-    )
-
-    # Operation - Combined
-
-    m.add_constraints(
-        operation_combined_power.sum("mode")
-        - operation_combined_power_capacity * p.combined_max_load
-        <= 0,
-        name="operation_combined_power_max_constraint",
-        mask=condition_mask(p),
-    )
-
-    m.add_constraints(
-        operation_combined_power.sum("mode")
-        - operation_combined_power_capacity * p.combined_min_load
-        >= 0,
-        name="operation_combined_power_min_constraint",
-        mask=condition_mask(p),
-    )
-
-    m.add_constraints(
-        operation_combined_power == 0,
-        # if combined_factor is not defined for a given mode, then the
-        # technology cannot operate under this mode
-        name="operation_combined_power_undefined_mode",
-        mask=condition_mask(p, (p.combined_factor == 0).all(dim="resource")),
-    )
-
-    # TODO: must run in combined
-    # m.add_constraints(
-    #     operation_combined_power - operation_combined_power_capacity * p.combined_must_run
-    #     == 0,
-    #     name="operation_combined_must_run_constraint_equality",
-    #     mask=(p.combined_must_run.sum("mode") == 1),
-    # )
-    #
-    # m.add_constraints(
-    #     operation_combined_power - operation_combined_power_capacity * p.combined_must_run >= 0,
-    #     name="operation_combined_must_run_constraint_inequality",
-    #     mask=(0 < p.combined_must_run) * (p.combined_must_run < 1),
-    # )
-
-    # Operation - Combined ramping (no unit commitment: bounds are expressed
-    # directly against installed capacity, as there is no on/off state).
-    # Ramp applies to the total across modes, not each mode independently
-    # (else a 2-mode tech's aggregate output could ramp ~2x too fast).
-
-    combined_ramp_up = p.combined_ramp_up.min(
-        [dim for dim in ["mode"] if dim in p.combined_ramp_up.dims]
-    )
-    combined_ramp_down = p.combined_ramp_down.min(
-        [dim for dim in ["mode"] if dim in p.combined_ramp_down.dims]
-    )
-
-    combined_mode_ramp_up = p.combined_mode_ramp_up.min(
-        [dim for dim in ["mode"] if dim in p.combined_mode_ramp_up.dims]
-    )
-    combined_mode_ramp_down = p.combined_mode_ramp_down.min(
-        [dim for dim in ["mode"] if dim in p.combined_mode_ramp_down.dims]
-    )
-
-    # Constant operation (P_t = P_(t-1)) where the ramps are 0: equalities
-    # instead of the ramp inequalities, which are removed from the masks
-    # below. Aggregate ramps both 0: one equality on the sum over modes. If
-    # the mode ramps are both 0 too, one equality per mode instead (it fixes
-    # every mode, so the aggregate equality and the pairwise mode rows of
-    # these units are redundant and left out). A single 0 keeps the
-    # inequalities.
-    aggregate_constant = (combined_ramp_up == 0) * (combined_ramp_down == 0)
-    mode_constant = (
-        aggregate_constant
-        * (combined_mode_ramp_up == 0)
-        * (combined_mode_ramp_down == 0)
-    )
-
-    if (aggregate_constant * ~mode_constant).any():
-        m.add_constraints(
-            operation_combined_power.sum("mode")
-            - operation_combined_power.sum("mode").shift(hour=1)
-            == 0,
-            name="operation_combined_constant_operation_constraint",
-            mask=condition_mask(
-                p, aggregate_constant * ~mode_constant * (p.hour != p.hour[0])
-            ),
+    if hourly:
+        add_to_balances(
+            operation_adequacy_constraint,
+            hourly_variables[1].sum("combined_tech"),
+            tb,
         )
 
-    if mode_constant.any():
-        m.add_constraints(
-            operation_combined_power - operation_combined_power.shift(hour=1)
-            == 0,
-            name="operation_combined_mode_constant_operation_constraint",
-            mask=condition_mask(p, mode_constant * (p.hour != p.hour[0])),
-        )
+    # Operation - Combined (power bounds, ramps)
 
-    m.add_constraints(
-        (
-            operation_combined_power.sum("mode")
-            - operation_combined_power.sum("mode").shift(hour=1)
-        )
-        / p.time_step_duration
-        - combined_ramp_up * operation_combined_power_capacity
-        <= 0,
-        name="operation_combined_ramp_up_constraint",
-        mask=condition_mask(
-            p,
-            np.isfinite(combined_ramp_up)
-            * ~aggregate_constant
-            * (p.hour != p.hour[0]),
-        ),
-    )
-
-    m.add_constraints(
-        (
-            operation_combined_power.sum("mode").shift(hour=1)
-            - operation_combined_power.sum("mode")
-        )
-        / p.time_step_duration
-        - combined_ramp_down * operation_combined_power_capacity
-        <= 0,
-        name="operation_combined_ramp_down_constraint",
-        mask=condition_mask(
-            p,
-            np.isfinite(combined_ramp_down)
-            * ~aggregate_constant
-            * (p.hour != p.hour[0]),
-        ),
-    )
-
-    # Optional, opt-in: limits how fast the split between modes shifts,
-    # independent of the aggregate ramp above. Off by default (nan). Applied
-    # pairwise across all modes -- no new variable: power(mode_a) -
-    # power(mode_b) is a linear combination of the existing power variable.
-
-    for mode_a, mode_b in itertools.combinations(p.mode.values, 2):
-        combined_mode_balance = operation_combined_power.sel(
-            mode=mode_a
-        ) - operation_combined_power.sel(mode=mode_b)
-
-        m.add_constraints(
-            (
-                combined_mode_balance
-                - combined_mode_balance.shift(hour=1)
-            )
-            / p.time_step_duration
-            - combined_mode_ramp_up * operation_combined_power_capacity
-            <= 0,
-            name=f"operation_combined_mode_ramp_up_constraint_{mode_a}_{mode_b}",
-            mask=condition_mask(
-                p,
-                np.isfinite(combined_mode_ramp_up)
-                * ~mode_constant
-                * (p.hour != p.hour[0]),
-            ),
-        )
-
-        m.add_constraints(
-            (
-                combined_mode_balance.shift(hour=1)
-                - combined_mode_balance
-            )
-            / p.time_step_duration
-            - combined_mode_ramp_down * operation_combined_power_capacity
-            <= 0,
-            name=f"operation_combined_mode_ramp_down_constraint_{mode_a}_{mode_b}",
-            mask=condition_mask(
-                p,
-                np.isfinite(combined_mode_ramp_down)
-                * ~mode_constant
-                * (p.hour != p.hour[0]),
-            ),
-        )
-
-    # TODO: Ramp constraints for lag > 1 not implemented yet and for storage
-    #     also
+    if hourly:
+        hourly_rows.limits()
 
     # Operation capacity
 
@@ -505,19 +639,8 @@ def add_combined(
         name="operation_combined_power_capacity_def",
     )
 
-    m.add_constraints(
-        -operation_combined_net_generation
-        + p.time_step_duration
-        * (p.combined_factor * operation_combined_power).sum(["mode"])
-        == 0,
-        name="operation_combined_net_generation_def",
-        mask=condition_mask(
-            p,
-            (np.isfinite(p.combined_factor) * (p.combined_factor != 0)).any(
-                [dim for dim in ["mode"] if dim in p.combined_factor.dims]
-            ),
-        ),
-    )
+    if hourly:
+        hourly_rows.net_generation_def()
 
     # Planning - Combined
 
@@ -556,18 +679,8 @@ def add_combined(
 
     # Costs - Combined
 
-    m.add_constraints(
-        -operation_combined_costs
-        + operation_year_normalization
-        * (
-            p.combined_variable_cost
-            * (p.time_step_duration * operation_combined_power).sum("hour")
-        ).sum("mode")
-        + p.combined_fixed_cost * operation_combined_power_capacity
-        == 0,
-        name="operation_combined_costs_def",
-        mask=condition_mask(p),
-    )
+    if hourly:
+        hourly_rows.costs_def()
 
     if annuity_full_life(p, "combined_annuity_cost"):
         # Annuity fixed at investment, paid over the vintage's full life
@@ -612,5 +725,21 @@ def add_combined(
         -planning_combined_costs + annuity_terms == 0,
         name="planning_combined_costs_def",
     )
+
+    # Block groups, after the module's last statement: their labels follow
+    # every hourly label, and each row is the hourly row on the block axis.
+
+    for L, p_g, idx_g in blocks:
+        variables = _group_variables(m, p_g, tb, L)
+        add_to_balances(
+            operation_adequacy_constraint,
+            variables[1].sum("combined_tech"),
+            tb,
+            src=L,
+        )
+        rows = rows_of(L, p_g, idx_g, variables)
+        rows.limits()
+        rows.net_generation_def()
+        rows.costs_def()
 
     return m
