@@ -607,18 +607,19 @@ def assert_same(a: xr.DataArray, b: xr.DataArray, name: str = "") -> None:
     np.testing.assert_allclose(a.fillna(0).values, b.transpose(*a.dims).fillna(0).values, atol=1e-6, err_msg=name)
 
 
-def assert_twin_equal(m_block, m_twin, tb: TimeBlocks, powers: list[str]) -> None:
+def assert_twin_equal(m_block, m_twin, tb: TimeBlocks, powers: list[str], skip: tuple = ()) -> None:
     """
     A solved block model equals its solved flat twin (section 15.1).
 
     Objective to 1e-7 (relative); ``planning_*`` and capacity variables to
     1e-6; each block power of ``powers`` repeated over the steps of its
-    blocks equals the twin's hourly power of the same technologies to 1e-6.
+    blocks equals the twin's hourly power of the same technologies to 1e-6. ``skip`` names variables left out (a
+    capacity split between vintages that the optimum leaves open).
     """
     assert m_block.objective.value == pytest.approx(m_twin.objective.value, rel=1e-7)
 
     for name in m_block.variables:
-        if name.startswith("planning_") or name.endswith("_capacity"):
+        if name not in skip and (name.startswith("planning_") or name.endswith("_capacity")):
             assert_same(solved(m_block, name), solved(m_twin, name), name)
     for name in powers:
         twin_name = re.sub(r"_block_\d+h_", "_", name)
@@ -1216,6 +1217,9 @@ def whole_t1_dataset() -> xr.Dataset:
     )
 
 
+T2_ELECTROLYSIS_FACTOR = 0.3  # tCO2 per MWh of electrolysis power
+
+
 def whole_t2_dataset() -> xr.Dataset:
     """
     ``_whole_base`` with the conversion technologies but ``wind_onshore`` and the electric boiler on blocks of 2 h.
@@ -1225,6 +1229,8 @@ def whole_t2_dataset() -> xr.Dataset:
     relaxation of the twin and not an equality (D9').
     """
     p = _whole_base()
+    # the electrolyser runs on blocks: give it an emission factor so that block technologies emit (it is 0 in the fixture)
+    p["conversion_emission_factor"] = p.conversion_emission_factor.where(p.conversion_tech != "electrolysis", T2_ELECTROLYSIS_FACTOR)
     return with_blocks(
         p,
         conversion={t: 2 for t in p.conversion_tech.values if t != "wind_onshore"},
@@ -1378,7 +1384,7 @@ def conditions_block_dataset() -> xr.Dataset:
     """
     The hand toy on 8 steps with steel forced to 2 h, built so that the dual of each coarse row is unique.
 
-    The furnace (on blocks of 2 h) is capped at 1 MW and steel may be shed at 7 per MWh: blocks that ask for more than 2 MWh (steps
+    ``power`` is a second, hourly resource (see below). The furnace (on blocks of 2 h) is capped at 1 MW and steel may be shed at 7 per MWh: blocks that ask for more than 2 MWh (steps
     (3, 3) and (1.5, 1.5)) pay the shedding cost at the margin, the others (steps (0.5, 0.7) and (0.2, 0.4)) the
     furnace's variable cost, so the coarse prices are 7n, vn, 7n, vn (n = operation_year_normalization).
     """
@@ -1386,7 +1392,23 @@ def conditions_block_dataset() -> xr.Dataset:
     p["conversion_power_capacity_max"] = (("area", "conversion_tech"), [[1.0]])
     p["load_shedding_max_capacity"] = ("resource", [0.0, np.nan])
     p["load_shedding_cost"] = ("resource", [0.0, 7.0])
-    return with_blocks(p, conversion={"furnace": 2}, resource={"steel": 2})
+    # an hourly resource with a priced, binding demand (shed at 5 per MWh, nothing produces it): its hourly adequacy duals are
+    # 5n, not zero
+    names = [*p.resource.values, "power"]
+    out = p.reindex(resource=names)
+    for name in p.data_vars:
+        if "resource" in p[name].dims:
+            out[name] = p[name].reindex(resource=names, fill_value=0.0)
+    out["demand"].loc[{"resource": "power"}] = 1.0
+    out["load_shedding_max_capacity"].loc[{"resource": "power"}] = np.nan
+    out["load_shedding_cost"].loc[{"resource": "power"}] = 5.0
+    out["spillage_cost"].loc[{"resource": "power"}] = 1.0
+    return with_blocks(out, conversion={"furnace": 2}, resource={"steel": 2})
+
+
+def net_import_twin_dataset() -> xr.Dataset:
+    """``coarse_step_dataset(4, 24, net_import=True)``: binding import and export maxima (the C6 net_import twin)."""
+    return coarse_step_dataset(4, 24, net_import=True)
 
 
 def net_import_expected_conditions_dataset() -> xr.Dataset:
@@ -1396,7 +1418,7 @@ def net_import_expected_conditions_dataset() -> xr.Dataset:
     The second condition has import prices 1.5 times and export prices 0.8 times the first one's, so that the
     conditions import and export differently; ``net_import_max_yearly_energy_import_expected`` and ``..._export_expected`` are on.
     """
-    p = coarse_step_dataset(4, 24, net_import=True)
+    p = net_import_twin_dataset()
     p = with_conditions(
         p,
         [0.4, 0.6],

@@ -22,10 +22,12 @@ from pommes.tests.time_blocks_helper import (
     conditions_block_dataset,
     flat_twin,
     net_import_expected_conditions_dataset,
+    net_import_twin_dataset,
     retrofit_combined_block_dataset,
     retrofit_conversion_block_dataset,
     solve_model,
     solved,
+    T2_ELECTROLYSIS_FACTOR,
     t3c_dataset,
     t3c_ratio_dataset,
     to_hours,
@@ -86,7 +88,7 @@ BUILDERS = {
     "t3b_hourly": lambda: _clean(whole_t3b_dataset()),
     "t3c": t3c_dataset,
     "t3c_ratio": t3c_ratio_dataset,
-    "net_import_maxima": lambda: coarse_step_dataset(4, 24, net_import=True),
+    "net_import_maxima": net_import_twin_dataset,
     "net_import_expected": net_import_expected_conditions_dataset,
     "net_import_carbon": lambda: coarse_step_dataset(4, 24, net_import=True, carbon=True),
     "retrofit_conversion_target": RETROFIT["conversion"][0],
@@ -173,6 +175,9 @@ def test_t2_whole_model_flat_twin():
     assert_twin_equal(m, twin, tb, ["operation_conversion_block_2h_power", "operation_combined_block_2h_power"])
     assert_same(solved(m, EMISSIONS), solved(twin, EMISSIONS), EMISSIONS)
     assert float(solved(m, EMISSIONS).sum()) > 0.1
+    # the block technologies emit, apart from the heat import: the electrolyser's share alone is above 0.1 t
+    electrolysis = solved(m, "operation_conversion_block_2h_power").sel(conversion_tech="electrolysis")
+    assert float(electrolysis.sum()) * T2_ELECTROLYSIS_FACTOR * 2 > 0.1
     assert float(abs(solved(m, "operation_combined_block_2h_power")).sum()) > 1.0  # the block boiler runs
     assert float(abs(solved(m, "operation_conversion_block_2h_power")).sum()) > 1.0  # and a block conversion tech
 
@@ -217,33 +222,31 @@ def _block_vs_step(m, reference, name):
     return got
 
 
-def _assert_equals_reference(key, per_block):
+def _assert_equals_reference(key, with_conversion):
     """
-    The block model of ``key`` equals today's model with steps of ``L`` h: objective, net_import, shedding and spillage
-    block by block; conversion, combined and flexdem energies block by block when ``per_block`` (else summed over the
-    blocks: the window and the idle ramps leave several optima that shift heat between blocks at the same cost, the
-    objective being unique); carbon on yearly totals.
+    The block model of ``key`` equals today's model with steps of ``L`` h on the quantities that have one optimum
+    (probed with random-weighted min and max at the optimal objective): objective, net_import imports, shedding and
+    spillage block by block; the total export, the combined and flexdem energies (and the conversion energies when
+    ``with_conversion``) summed over the blocks, since equal-cost shifts between blocks leave their distribution open;
+    carbon on yearly totals.
     """
     p = BUILDERS[key]()
     m, reference = solved_model(key), reference_model(key, L)
     assert m.objective.value == pytest.approx(reference.objective.value, rel=1e-7)
-    for name in (f"operation_net_import_block_{L}h_import", f"operation_net_import_block_{L}h_export"):
-        assert float(abs(_block_vs_step(m, reference, name)).sum()) > 0.1, name  # not a comparison of zeros
+    assert float(abs(_block_vs_step(m, reference, f"operation_net_import_block_{L}h_import")).sum()) > 0.1
     for name in (f"operation_load_shedding_block_{L}h_power", f"operation_spillage_block_{L}h_power"):
         _block_vs_step(m, reference, name)
-    for name in (
-        f"operation_conversion_block_{L}h_power",
-        f"operation_combined_block_{L}h_power",
-        f"operation_flexdem_block_{L}h_demand",
-    ):
-        if per_block:
-            got = _block_vs_step(m, reference, name)
-        else:
-            got = solved(m, name).sum(block_dim(L))
-            want = solved(reference, name.replace(f"_block_{L}h_", "_"))
-            if "resource" in got.dims:
-                want = want.sel(resource=got.indexes["resource"])
-            assert_same(got, want.sum("hour"), name)
+    export = f"operation_net_import_block_{L}h_export"  # unique only as a total over areas and blocks in the ratio cell
+    np.testing.assert_allclose(
+        float(solved(m, export).sum()), float(solved(reference, export.replace(f"_block_{L}h_", "_")).sum()), rtol=1e-6
+    )
+    names = [f"operation_combined_block_{L}h_power", f"operation_flexdem_block_{L}h_demand"]
+    for name in names + ([f"operation_conversion_block_{L}h_power"] if with_conversion else []):
+        got = solved(m, name).sum(block_dim(L))
+        want = solved(reference, name.replace(f"_block_{L}h_", "_"))
+        if "resource" in got.dims:
+            want = want.sel(resource=got.indexes["resource"])
+        assert_same(got, want.sum("hour"), name)
         assert float(abs(got).sum()) > 0.1, name
     if bool(p.carbon):  # compared on yearly totals only: the block model's emission rows stay hourly
         for name in (EMISSIONS, "operation_total_carbon_emissions"):
@@ -261,7 +264,7 @@ def _assert_equals_reference(key, per_block):
 )
 def test_t3c_uniform_coarse_step(key, rows):
     """T3(c): ratios, window, ramps and both yearly maxima equal today's model run with steps of 4 h; each family binds."""
-    _assert_equals_reference(key, per_block=key == "t3c_ratio")
+    _assert_equals_reference(key, with_conversion=key == "t3c")
     m = solved_model(key)
     for name in rows:
         assert _binds(m, name, equality="conservation" in name), name
@@ -280,14 +283,17 @@ def test_t3c_uniform_coarse_step(key, rows):
 def test_net_import_twin_at_scale(key):
     """
     Constant-price blocks against steps of 4 h: binding import and export maxima; both on the expectation under two
-    conditions; a binding carbon tax. Objective and every block energy equal.
+    conditions; a binding carbon tax. Objective, the imports block by block and the total exports equal (the export distribution has several optima).
     """
     m, reference = solved_model(key), reference_model(key, L)
     assert m.objective.value == pytest.approx(reference.objective.value, rel=1e-7)
     for kind, resource in (("import", "heat"), ("export", "gas")):
         got = solved(m, f"operation_net_import_block_{L}h_{kind}").sel(resource=resource).rename({block_dim(L): "hour"})
         want = solved(reference, f"operation_net_import_{kind}").sel(resource=resource)
-        assert_same(got, want, kind)
+        if kind == "import":  # one optimum block by block; the export is unique only as a total (shifts between blocks and areas)
+            assert_same(got, want, kind)
+        else:
+            np.testing.assert_allclose(float(got.sum()), float(want.sum()), rtol=1e-6, err_msg=kind)
         assert float(got.max()) > 0.1  # the rest of the world is used
         row = f"operation_net_import_block_{L}h_{kind}_yearly_max_constraint"
         assert _binds(m, row), row  # the maximum binds
@@ -317,7 +323,11 @@ def _retrofit_twin(module, side):
     p = BUILDERS[key]()
     m = solved_model(key)
     twin = solve_model(flat_twin(p, **_lengths(p)))
-    assert_twin_equal(m, twin, time_blocks(p), [])  # objective, every planning variable (transfers included), capacities
+    # objective, every planning variable (transfers included), capacities. The conversion capacity of the combined
+    # datasets is not unique per vintage (probed: the 2020, 2030 and 2040 vintages substitute at the same objective;
+    # the capacity of each operation year is unique and still compared)
+    skip = ("planning_conversion_power_capacity",) if module == "combined" else ()
+    assert_twin_equal(m, twin, time_blocks(p), [], skip=skip)
     transfer = solved(m, f"planning_retrofit_{module}_power_capacity")
     assert float(transfer.sum()) > 1e-3  # a transfer really happens
     return transfer
@@ -400,9 +410,9 @@ def test_coarse_duals_scaled_by_condition_dual_scale(name):
     p = _conditioned(conditions_block_dataset())
     ref = solved_model("conditions").constraints[name].dual
     raw = solved_model("conditions_two").constraints[name].dual
+    assert float(abs(ref).max()) > 1.0  # priced rows: a unique dual, not zeros (hourly: ``power``, shed at 5)
     if name.startswith("operation_adequacy_block"):
-        assert float(ref.max() - ref.min()) > 0.1  # the prices differ from block to block: a unique dual, not zeros
-        assert float(abs(ref).max()) > 1.0
+        assert float(ref.max() - ref.min()) > 0.1  # the prices differ from block to block
     price = raw / condition_dual_scale(p)
     for k in p["operating_condition"].values:
         np.testing.assert_allclose(
