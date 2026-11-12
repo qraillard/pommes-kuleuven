@@ -279,3 +279,29 @@ def test_block_net_import_equals_coarse_step_reference(L, horizon):
         want = solved(reference, f"operation_net_import_{kind}").sel(resource=resource).transpose("area", "hour", "year_op")
         np.testing.assert_allclose(got.values, want.values, atol=1e-6)
         assert got.values.max() > 0.1  # the rest of the world is used
+
+
+@pytest.mark.parametrize("name", ["import_price", "export_price", "emission_factor", "total_emission_factor"])
+def test_nan_per_step_parameter_reads_as_zero_in_the_block_mean(name):
+    """A NaN step of a coarse resource's price or factor reads as 0 for that step only (R8), not for the block."""
+    block, _ = _hand([2, 0], [1, 10])
+    name = f"net_import_{name}"
+    if "hour" not in block[name].dims:  # a scalar default: give it the shape of the import price, value 2 or its own
+        block[name] = xr.zeros_like(block["net_import_import_price"]) + block[name] + 2.0
+    block[name].loc[dict(resource="steel", hour=0)] = np.nan
+    (_, p_g), = [g for g in net_import_groups(block, time_blocks(block)) if g[0] is not None]
+    # steps (1, 3) h, values (NaN read as 0, then 10 or 0 as the dataset has): block mean over 4 h
+    want = (block[name].fillna(0) * block.time_step_duration).sum("hour") / 4
+    np.testing.assert_allclose(p_g[name].sel(resource="steel").values.ravel(), want.sel(resource="steel").values.ravel())
+    assert not bool(p_g[name].isnull().any())
+
+
+def test_nan_import_price_inside_a_block_equals_the_hourly_twin():
+    """
+    Steps (1, 3) h, demand (1, 3) MWh, price (NaN, 10): the hourly row reads the NaN as 0 and pays 0 + 3 * 10 = 30 n;
+    the block (mean price 7.5, 4 MWh) pays the same. Without the fillna the block mean is NaN, read as 0: cost 0.
+    """
+    block, hourly = _hand([1, 3], [np.nan, 10])
+    n = toy_n(block)
+    assert _objective(hourly) == pytest.approx(30 * n, rel=1e-9)
+    assert _objective(block) == pytest.approx(30 * n, rel=1e-9)

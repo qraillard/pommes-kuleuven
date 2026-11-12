@@ -1422,7 +1422,8 @@ def conditions_block_dataset() -> xr.Dataset:
 
     ``power`` is a second, hourly resource (see below). The furnace (on blocks of 2 h) is capped at 1 MW and steel may
     be shed at 7 per MWh: blocks that ask for more than 2 MWh (steps (3, 3) and (1.5, 1.5)) pay the shedding cost at the
-    margin, the others (steps (0.5, 0.7) and (0.2, 0.4)) the furnace's variable cost, so the coarse prices are 7n, vn, 7n, vn (n = operation_year_normalization).
+    margin, the others (steps (0.5, 0.7) and (0.2, 0.4)) the furnace's variable cost, so the coarse prices are 7n, vn,
+    7n, vn (n = operation_year_normalization).
     """
     p = hand_toy([1.0] * 8, [3.0, 3.0, 0.5, 0.7, 1.5, 1.5, 0.2, 0.4])
     p["conversion_power_capacity_max"] = (("area", "conversion_tech"), [[1.0]])

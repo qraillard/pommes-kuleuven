@@ -564,6 +564,8 @@ def _per_label(p: Dataset, name: str, dim: str):
     da = p.get(name)
     if da is None:
         return labels, None
+    if set(da.dims) - {dim}:
+        raise ValueError(f"{name}: only the {dim} coordinate is allowed")
     if dim in da.dims:
         da = da.reindex({dim: labels})
     else:

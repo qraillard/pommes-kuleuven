@@ -618,8 +618,9 @@ Blocks and anchoring
 --------------------
 
 With :math:`(\Delta T)_{t}` the length of step :math:`t`, the start of a step is
-:math:`\tau_t = \sum_{t' < t} (\Delta T)_{t'}` and its block is :math:`b_L(t) = \lfloor \tau_t / L \rfloor`, so blocks
-are anchored at the first step of the modelled horizon (the start of the year in a full-year run, the first step of a
+:math:`\tau_t = \sum_{t' < t} (\Delta T)_{t'}` and its block is
+:math:`b_L(t) = \lfloor (\tau_t + 10^{-9}) / L \rfloor` (a tolerance of :math:`10^{-9}` h), so blocks are anchored
+at the first step of the modelled horizon (the start of the year in a full-year run, the first step of a
 time slice). A block :math:`b` has duration :math:`D_L(b) = \sum_{t \in b} (\Delta T)_{t}` and the duration of its
 first step is :math:`\Delta^0_L(b)`. The last block may be shorter than :math:`L` (8760 h gives 52 weekly blocks and a
 last block of 24 h). A step must not cross a block boundary (tolerance :math:`10^{-9}` h). The block dimension of
@@ -739,14 +740,19 @@ equality forcing the power to be constant inside each block.
       - relaxation
     * - Coarse resource balance (derived or forced)
       - relaxation of the hourly balance where net import prices and emission factors are constant inside each block (or
-        net import is absent): the block holds the energy of the block, not of each step; otherwise it has no sign
-        against the hourly balance. Exact against the model run with steps of :math:`L` hours when every contributor has the
-        balance's length and the horizon is a multiple of :math:`L`
+        net import is absent) and no flexible demand ramp is finite (with binding ramps the coarse model can be
+        dearer): the block holds the energy of the block, not of each step; otherwise it has no sign against the hourly
+        balance. Exact against the model run with steps of :math:`L` hours when every contributor has the balance's
+        length, the horizon is a multiple of :math:`L`, there is no conversion or combined ramp (mode-pair ramps
+        included) and no daily production maximum (the block ramp divides by the duration of the block's first step and
+        the daily row counts days), and, under rule ``mean``, the reference's availability is set to the
+        duration-weighted mean per step
     * - Load shedding and spillage on a coarse resource
       - exact
     * - Flexible demand on a coarse balance
-      - equal to the model run with steps of :math:`L` hours; against an hourly flexible demand it has no sign when
-        ramps bind (the ramp allowance is :math:`\rho \, FD_b` of the current block)
+      - equal to the model run with steps of :math:`L` hours when the horizon is a multiple of :math:`L` (with a short
+        last block the reference's ramp is the energy-difference row); against an hourly flexible demand it has no sign
+        when ramps bind (the ramp allowance is :math:`\rho \, FD_b` of the current block)
     * - Net imports on a coarse balance
       - exact against hourly imports held flat inside each block; equal to summed hourly imports when prices (and
         emission factors if carbon is on) are constant inside each block, otherwise a restriction of it
@@ -763,7 +769,9 @@ different technologies, ``model.solution`` joins them with ``nan`` outside their
 dropped). ``utils.expand_to_hours(da, tb, kind)`` maps a block array to the steps, ``kind="energy"`` multiplying by
 :math:`(\Delta T)_{t}/D_L(b)` and ``kind="intensive"`` repeating the value; ``post_process.module_hourly`` combines the
 hourly variable of a module (when it exists) and the expanded block variables, and ``get_net_generation`` and the plots
-use it, including the block load shedding and spillage.
+use it, including the block load shedding and spillage. ``module_hourly``, and so ``get_net_generation`` and
+``plot_power`` on block models, take a dense solution: a solution of the sparse engine (pommes-kul) must be densified
+first.
 
 .. _section-operating-conditions:
 

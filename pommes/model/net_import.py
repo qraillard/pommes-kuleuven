@@ -64,7 +64,8 @@ def net_import_groups(
         if L is not None:
             for name in _PER_STEP:
                 if name in p_g:
-                    p_g[name] = block_mean(p_g[name], tb, L)
+                    # a NaN step reads as 0 in the hourly row, so in the block mean too (R8)
+                    p_g[name] = block_mean(p_g[name].fillna(0), tb, L)
         groups.append((L, p_g))
     return groups
 

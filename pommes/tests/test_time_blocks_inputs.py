@@ -808,3 +808,12 @@ def test_long_block_and_inactive_tech_are_not_refused():
     tb = time_blocks(setl(p, "conversion", a=100, idle_tech=4))
     assert tb.duration[100].values.tolist() == [8]
     assert tb.techs("conversion", 4) == ["idle_tech"]
+
+
+@pytest.mark.parametrize("dim", ["area", "year_op", "operating_condition"])
+def test_an_extra_dimension_without_check_inputs_is_a_clear_error(parameters, dim):
+    p = parameters.copy()
+    values = ["a", "b"] if dim == "operating_condition" else p[dim].values
+    p["resource_time_block_hrs"] = per(p, "resource", methane=24).expand_dims({dim: values})
+    with pytest.raises(ValueError, match="resource_time_block_hrs: only the resource coordinate is allowed"):
+        time_blocks(p)
