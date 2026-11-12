@@ -31,10 +31,12 @@ def per(p, dim, **values):
 
 
 def blocks(p, conversion=None, combined=None, resource=None, steps=None):
-    """``p`` with block lengths per technology or resource (dicts label -> hours)."""
+    """``p`` with block lengths per tech or resource (dicts label -> hours)."""
     p = p.copy()
     if conversion is not None:
-        p["conversion_time_block_hrs"] = per(p, "conversion_tech", **conversion)
+        p["conversion_time_block_hrs"] = per(
+            p, "conversion_tech", **conversion
+        )
     if combined is not None:
         p["combined_time_block_hrs"] = per(p, "combined_tech", **combined)
     if resource is not None:
@@ -67,20 +69,22 @@ def test_module_parameters_not_defaulted_when_the_module_is_off(parameters):
 def test_new_parameters_refuse_other_coordinates(parameters, dim):
     p = parameters.copy()
     p["conversion_time_block_hrs"] = per(p, "conversion_tech", ocgt=24)
-    p["conversion_time_block_hrs"] = p["conversion_time_block_hrs"].expand_dims(
-        {dim: p[dim].values}
-    )
+    p["conversion_time_block_hrs"] = p[
+        "conversion_time_block_hrs"
+    ].expand_dims({dim: p[dim].values})
     with pytest.raises(ValueError, match="conversion_time_block_hrs"):
         check_inputs(p)
 
 
 def test_new_parameters_refuse_operating_condition(parameters):
     p = parameters.assign_coords(operating_condition=["a", "b"]).assign(
-        operating_condition_weight=xr.DataArray([0.5, 0.5], dims="operating_condition")
+        operating_condition_weight=xr.DataArray(
+            [0.5, 0.5], dims="operating_condition"
+        )
     )
-    p["conversion_time_block_hrs"] = per(p, "conversion_tech", ocgt=24).expand_dims(
-        operating_condition=["a", "b"]
-    )
+    p["conversion_time_block_hrs"] = per(
+        p, "conversion_tech", ocgt=24
+    ).expand_dims(operating_condition=["a", "b"])
     with pytest.raises(ValueError, match="conversion_time_block_hrs"):
         check_inputs(p)
 
@@ -98,7 +102,9 @@ def test_rule_round_trips_through_netcdf(parameters, tmp_path):
         dims="conversion_tech",
         coords={"conversion_tech": parameters.conversion_tech.values},
     )
-    ds = xr.Dataset({"conversion_time_block_rule": rule, "zero_d": np.array("min")})
+    ds = xr.Dataset(
+        {"conversion_time_block_rule": rule, "zero_d": np.array("min")}
+    )
     ds.to_netcdf(tmp_path / "rule.nc", engine="h5netcdf")
     back = xr.load_dataset(tmp_path / "rule.nc", engine="h5netcdf")
     xr.testing.assert_equal(back["conversion_time_block_rule"], rule)
@@ -133,7 +139,8 @@ def test_block_maps(parameters):
 
 
 def test_block_maps_uneven_steps(parameters):
-    tb = time_blocks(blocks(parameters, conversion={"ocgt": 4}, steps=[1, 1, 2]))
+    p = blocks(parameters, conversion={"ocgt": 4}, steps=[1, 1, 2])
+    tb = time_blocks(p)
     assert tb.duration[4].values.tolist()[:2] == [4, 4]
     assert tb.duration[4].values.tolist() == [4, 4, 4, 1]
     assert tb.first_step_duration[4].values.tolist()[:2] == [1, 1]
@@ -149,7 +156,9 @@ def test_resource_lengths(parameters):
 
 
 def test_tech_length_is_nan_when_the_module_is_off(parameters):
-    p = blocks(parameters, conversion={"ocgt": 24}).assign(conversion=np.array(False))
+    p = blocks(parameters, conversion={"ocgt": 24}).assign(
+        conversion=np.array(False)
+    )
     tb = time_blocks(p)
     assert bool(tb.tech_length["conversion"].isnull().all())
     assert not tb.active
@@ -180,13 +189,17 @@ def test_r1_length_not_positive_or_not_whole(parameters, length):
 
 
 def test_r2_step_crossing_a_block_boundary(parameters):
-    with pytest.raises(ValueError, match="hour"):
+    cross = "crosses a block boundary"
+    with pytest.raises(ValueError, match=cross):
         time_blocks(blocks(parameters, conversion={"ocgt": 2}, steps=[1, 2]))
-    with pytest.raises(ValueError, match="hour"):
+    with pytest.raises(ValueError, match=cross):
         time_blocks(blocks(parameters, conversion={"ocgt": 1}, steps=[3]))
-    # within the tolerance
+    # within the tolerance, and just beyond it
     steps = [1, 1 + 1e-10]
     time_blocks(blocks(parameters, conversion={"ocgt": 2}, steps=steps))
+    steps = [1, 1 + 1e-8]
+    with pytest.raises(ValueError, match=cross):
+        time_blocks(blocks(parameters, conversion={"ocgt": 2}, steps=steps))
 
 
 @pytest.mark.parametrize("bad", [0.0, -1.0, np.nan])
@@ -236,7 +249,8 @@ def test_blank_rule_reads_as_min(parameters):
         "min",
         "mean",
     ]
-    assert conversion_block_rule(p.drop_vars(FOUR)).values.tolist() == ["min"] * n
+    rule = conversion_block_rule(p.drop_vars(FOUR))
+    assert rule.values.tolist() == ["min"] * n
 
 
 def test_all_nan_raises_and_warns_nothing(parameters):
@@ -271,3 +285,36 @@ def test_check_inputs_runs_the_time_block_checks(parameters):
     )
     with pytest.raises(ValueError, match="ocgt.*mni"):
         check_inputs(p)
+
+
+@pytest.mark.parametrize("step", [1 / 3, 0.1])
+def test_non_dyadic_steps_are_not_refused(parameters, step):
+    # R5: cumsum lands an ulp below a boundary, floor(start + 1e-9) absorbs it
+    p = parameters.reindex(hour=np.arange(100))
+    tb = time_blocks(blocks(p, conversion={"ocgt": 4}, steps=[step]))
+    full = round(4 / step)
+    nb = int(100 * step // 4)
+    assert tb.duration[4].values[:nb] == pytest.approx(4)
+    assert tb.start[4].values == pytest.approx(4 * np.arange(nb + 1))
+    assert tb.block_of_hour[4].values[full - 1 : full + 1].tolist() == [0, 1]
+
+
+def test_combined_block_length(parameters):
+    p = blocks(parameters, combined={"electric_boiler": 24})
+    tb = time_blocks(p)
+    assert tb.active
+    assert tb.techs("combined", 24) == ["electric_boiler"]
+    assert tb.techs("combined", None) == []
+    off = time_blocks(p.assign(combined=np.array(False)))
+    assert bool(off.tech_length["combined"].isnull().all())
+    assert not off.active
+    with pytest.raises(ValueError, match="electric_boiler.*1.5"):
+        time_blocks(blocks(parameters, combined={"electric_boiler": 1.5}))
+
+
+def test_block_length_needs_time_step_duration(parameters):
+    p = blocks(parameters, conversion={"ocgt": 4}).drop_vars(
+        "time_step_duration"
+    )
+    with pytest.raises(ValueError, match="time_step_duration"):
+        time_blocks(p)
