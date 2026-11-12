@@ -1,6 +1,8 @@
 """change_resolution and add_to_balances (multi-resolution, sections 7-8)."""
 
 import dataclasses
+import inspect
+import re
 import subprocess
 import sys
 import warnings
@@ -15,7 +17,16 @@ from linopy import Model
 from pommes.model.build_model import build_model
 from pommes.model.data_validation.dataset_check import check_inputs
 from pommes.tests.time_blocks_helper import solved, with_blocks
-from pommes.utils import add_to_balances, block_dim, change_resolution, time_blocks
+import pommes.utils
+from pommes.utils import (
+    BLOCK_MODULES,
+    _BLOCK_NAME,
+    add_to_balances,
+    block_dim,
+    block_prefix,
+    change_resolution,
+    time_blocks,
+)
 
 
 def tb_of(hours=8, steps=(1.0,), **resource):
@@ -467,3 +478,19 @@ def test_the_time_map_guards_survive_python_O():
     )
     run = subprocess.run([sys.executable, "-O", "-c", code], capture_output=True, text=True)
     assert run.returncode == 0, run.stderr or run.stdout
+
+
+def test_utils_has_no_bare_assert():
+    """Minor 1: every guard of utils raises explicitly, so ``python -O`` keeps it."""
+    assert not re.findall(r"^\s*assert\b", inspect.getsource(pommes.utils), re.M)
+
+
+def test_block_name_rule_and_block_prefix_read_one_module_tuple():
+    """Minor 2: a module with block objects is in ``BLOCK_MODULES``, so the H5 rule matches its names."""
+    assert "net_import" in BLOCK_MODULES
+    for module in BLOCK_MODULES:
+        assert _BLOCK_NAME.match(f"{block_prefix(module, 6)}x"), module
+        assert block_prefix(module, None) == f"operation_{module}_"
+    assert not _BLOCK_NAME.match("operation_conversion_power")
+    with pytest.raises(ValueError, match="BLOCK_MODULES"):
+        block_prefix("turpe", 6)

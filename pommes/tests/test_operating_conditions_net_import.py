@@ -8,6 +8,11 @@ import pytest
 import xarray as xr
 
 from pommes.model.build_model import build_model
+from pommes.tests.time_blocks_helper import (
+    coarse_step_dataset,
+    coarse_step_reference,
+    solved,
+)
 from pommes.tests.conditions_helper import (
     assert_condition_dims_consistent,
     with_conditions,
@@ -171,3 +176,35 @@ def test_a_weight_zero_condition_keeps_its_rows_and_costs_nothing(p_base):
     for name in WITH_CONDITION:
         container = m.variables if name in m.variables else m.constraints
         assert (container[name].labels.sel(operating_condition="b") != -1).any(), name
+
+
+def test_block_net_import_expected_flags_two_conditions():
+    """Both yearly maxima on the expectation over two conditions, blocks against steps of 4 h (D10)."""
+    L = 4
+    p = coarse_step_dataset(L, 24, net_import=True)
+    p = with_conditions(
+        p,
+        [0.4, 0.6],
+        net_import_import_price=[p.net_import_import_price, 1.5 * p.net_import_import_price],
+        net_import_export_price=[p.net_import_export_price, 0.8 * p.net_import_export_price],
+    )
+    p["net_import_max_yearly_energy_import_expected"] = True
+    p["net_import_max_yearly_energy_export_expected"] = True
+    m = _solve(p)
+    reference = _solve(coarse_step_reference(p, L))
+    assert m.objective.value == pytest.approx(reference.objective.value, rel=1e-7)
+    block = f"operation_net_import_block_{L}h_"
+    for engine, prefix in ((m, block), (reference, "operation_net_import_")):
+        for name in (f"{prefix}import_yearly_max_constraint", f"{prefix}export_yearly_max_constraint"):
+            con = engine.constraints[name]
+            assert "operating_condition" not in con.labels.dims, name  # one row per year, on the expectation
+            assert (abs(con.dual.where(con.labels != -1)) > 1e-9).any(), f"{name} does not bind"
+    for kind, resource in (("import", "heat"), ("export", "gas")):
+        got = solved(m, f"{block}{kind}").sel(resource=resource).transpose(
+            "area", f"time_block_{L}h", "year_op", "operating_condition"
+        )
+        want = solved(reference, f"operation_net_import_{kind}").sel(resource=resource).transpose(
+            "area", "hour", "year_op", "operating_condition"
+        )
+        np.testing.assert_allclose(got.values, want.values, atol=1e-6)
+        assert got.values.max() > 0.1

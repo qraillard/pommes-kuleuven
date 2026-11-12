@@ -5,15 +5,68 @@ from linopy import Constraint, Model
 from xarray import Dataset
 
 from pommes.utils import (
+    OPERATING_CONDITION_WEIGHT,
     TimeBlocks,
     add_to_balances,
     annual_mask,
     annual_quantity,
+    block_dim,
+    block_mean,
+    block_prefix,
+    check_group_coord,
     condition_coords,
     condition_mask,
     expected_over_conditions,
+    select_resources,
     time_blocks,
 )
+
+# Per-step parameters: Delta-weighted block means on a coarse balance (D10)
+_PER_STEP = (
+    "net_import_import_price",
+    "net_import_export_price",
+    "net_import_emission_factor",
+    "net_import_total_emission_factor",
+)
+# Parameters read by the statements below (the dataset a group is selected on)
+_READ = (
+    *_PER_STEP,
+    "net_import_max_yearly_energy_import",
+    "net_import_max_yearly_energy_import_expected",
+    "net_import_max_yearly_energy_export",
+    "net_import_max_yearly_energy_export_expected",
+    OPERATING_CONDITION_WEIGHT,
+)
+
+
+def net_import_groups(
+    p: Dataset, tb: TimeBlocks
+) -> list[tuple[int | None, Dataset]]:
+    """
+    The net_import parameters of each balance, as ``(L, p_L)`` pairs (section 6.5).
+
+    ``L`` is None for the hourly balance. Without a coarse resource the list
+    is ``[(None, p)]``, ``p`` itself and no ``sel`` (T0). Otherwise the
+    hourly group is ``p`` restricted to ``tb.resources(None)`` and each coarse
+    group ``p_L`` to ``tb.resources(L)``, on the net_import parameters only,
+    with the four per-step parameters replaced under the same names by their
+    block means on ``time_block_{L}h``: no ``hour`` is left in ``p_L`` (H5).
+    Carbon reads the same groups (section 6.7).
+    """
+    if not tb.balance_lengths:
+        return [(None, p)]
+    groups = []
+    for L in [None, *tb.balance_lengths]:
+        res = tb.resources(L)
+        if not res:
+            continue
+        p_g = select_resources(p, _READ, res)
+        if L is not None:
+            for name in _PER_STEP:
+                if name in p_g:
+                    p_g[name] = block_mean(p_g[name], tb, L)
+        groups.append((L, p_g))
+    return groups
 
 
 def add_net_import(
@@ -107,41 +160,18 @@ def add_net_import(
     tb = time_blocks(model_parameters) if tb is None else tb
     m = model
     p = model_parameters
+    groups = net_import_groups(p, tb)
 
     # ------------
     # Variables
     # ------------
 
-    # Operation - Imports & exports from rest of the world
+    # Operation - Imports & exports from rest of the world, per balance. A
+    # block variable is the energy of its block (no duration in the rows).
 
-    operation_net_import_import = m.add_variables(
-        name="operation_net_import_import",
-        lower=0,
-        coords=[p.area, p.hour, p.resource, p.year_op, *condition_coords(p)],
-        mask=condition_mask(p),
-    )
-
-    operation_net_import_export = m.add_variables(
-        name="operation_net_import_export",
-        lower=0,
-        coords=[p.area, p.hour, p.resource, p.year_op, *condition_coords(p)],
-        mask=condition_mask(p),
-    )
-
-    # Operation - Imports & exports intermediate variables
-
-    operation_net_import_abs = m.add_variables(
-        name="operation_net_import_abs",
-        lower=0,
-        coords=[p.area, p.hour, p.resource, p.year_op, *condition_coords(p)],
-        mask=condition_mask(p),
-    )
-
-    operation_net_import_net_generation = m.add_variables(
-        name="operation_net_import_net_generation",
-        coords=[p.area, p.hour, p.resource, p.year_op, *condition_coords(p)],
-        mask=condition_mask(p),
-    )
+    blocks = {}
+    for L, p_g in groups:
+        blocks[L] = _add_variables(m, p_g, tb, L)
 
     # Costs - Imports & exports
 
@@ -163,10 +193,68 @@ def add_net_import(
     # Constraints
     # --------------
 
+    for L, p_g in groups:
+        _add_rows(
+            m,
+            p_g,
+            tb,
+            L,
+            blocks[L],
+            operation_net_import_costs,
+            operation_year_normalization,
+            operation_adequacy_constraint,
+        )
+
+    return m
+
+
+def _add_variables(m: Model, p: Dataset, tb: TimeBlocks, L: int | None):
+    """The four variables of one balance (``L`` None: hourly, today's)."""
+    prefix = block_prefix("net_import", L)
+    time = p.hour if L is None else tb.duration[L][block_dim(L)]
+    coords = [p.area, time, p.resource, p.year_op, *condition_coords(p)]
+    mask = condition_mask(p)
+    imp = m.add_variables(
+        name=f"{prefix}import", lower=0, coords=coords, mask=mask
+    )
+    exp = m.add_variables(
+        name=f"{prefix}export", lower=0, coords=coords, mask=mask
+    )
+    # Operation - Imports & exports intermediate variables
+    abs_ = m.add_variables(name=f"{prefix}abs", lower=0, coords=coords, mask=mask)
+    net = m.add_variables(name=f"{prefix}net_generation", coords=coords, mask=mask)
+    return imp, exp, abs_, net
+
+
+def _add_rows(
+    m: Model,
+    p: Dataset,
+    tb: TimeBlocks,
+    L: int | None,
+    variables,
+    costs,
+    operation_year_normalization: float,
+    operation_adequacy_constraint: Constraint,
+) -> None:
+    """
+    The rows of one balance, written on its own parameters ``p`` (``L`` None: hourly).
+
+    ``T`` is ``hour`` or ``time_block_{L}h``; the hourly statements are
+    today's. The block energies sum to the year's energy, so no duration
+    enters a row; the prices are block means (``net_import_groups``).
+    """
+    operation_net_import_import, operation_net_import_export = variables[:2]
+    operation_net_import_abs, operation_net_import_net_generation = variables[2:]
+    prefix = block_prefix("net_import", L)
+    T = "hour" if L is None else block_dim(L)
+
     # Adequacy constraint
 
     add_to_balances(
-        operation_adequacy_constraint, operation_net_import_net_generation, tb
+        operation_adequacy_constraint,
+        operation_net_import_net_generation,
+        tb,
+        src=L,
     )
 
     # Operation - Imports & exports
@@ -178,7 +266,7 @@ def add_net_import(
     m.add_constraints(
         annual_quantity(
             operation_year_normalization
-            * operation_net_import_import.sum(["area", "hour"]),
+            * operation_net_import_import.sum(["area", T]),
             p,
             "net_import_max_yearly_energy_import_expected",
         )
@@ -188,13 +276,13 @@ def add_net_import(
             "net_import_max_yearly_energy_import_expected",
             np.isfinite(p.net_import_max_yearly_energy_import),
         ),
-        name="operation_net_import_import_yearly_max_constraint",
+        name=f"{prefix}import_yearly_max_constraint",
     )
 
     m.add_constraints(
         annual_quantity(
             operation_year_normalization
-            * operation_net_import_export.sum(["area", "hour"]),
+            * operation_net_import_export.sum(["area", T]),
             p,
             "net_import_max_yearly_energy_export_expected",
         )
@@ -204,7 +292,7 @@ def add_net_import(
             "net_import_max_yearly_energy_export_expected",
             np.isfinite(p.net_import_max_yearly_energy_export),
         ),
-        name="operation_net_import_export_yearly_max_constraint",
+        name=f"{prefix}export_yearly_max_constraint",
     )
 
     # Operation - Imports & exports intermediate variables
@@ -215,7 +303,7 @@ def add_net_import(
         + operation_net_import_export
         == 0,
         mask=condition_mask(p),
-        name="operation_net_import_abs_def",
+        name=f"{prefix}abs_def",
     )
 
     m.add_constraints(
@@ -224,23 +312,28 @@ def add_net_import(
         - operation_net_import_export
         == 0,
         mask=condition_mask(p),
-        name="operation_net_import_net_generation_def",
+        name=f"{prefix}net_generation_def",
     )
 
-    # Costs - Imports & exports
+    # Costs - Imports & exports. Each cell of costs is defined once across
+    # the groups: the partner is restricted to the group's resources, in the
+    # group's order (H1).
 
+    res = list(p.indexes["resource"])
+    partner = costs if res == list(costs.indexes["resource"]) else costs.sel(resource=res)
     m.add_constraints(
-        -operation_net_import_costs
+        -partner
         # Normalised variable cots with the duration of the operation periods
         # to be consistent with annualised costs
         + operation_year_normalization
         * (
             +p.net_import_import_price * operation_net_import_import
             - p.net_import_export_price * operation_net_import_export
-        ).sum("hour")
+        ).sum(T)
         == 0,
         mask=condition_mask(p),
-        name="operation_net_import_costs_def",
+        name=f"{prefix}costs_def",
     )
-
-    return m
+    check_group_coord(
+        m.constraints[f"{prefix}costs_def"], p.indexes["resource"], "resource"
+    )

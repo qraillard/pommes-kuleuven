@@ -996,7 +996,10 @@ def block_mean(x: DataArray, tb: TimeBlocks, L: int) -> DataArray:
     """Duration-weighted mean of ``x`` over the blocks of ``L`` hours (section 4.2)."""
     if "hour" not in x.dims:
         return x
-    total = (tb.step * x).groupby(tb.block_of_hour[L]).sum(skipna=False)
+    group = tb.block_of_hour[L]
+    check_group(group, None)
+    check_axis(x, "hour", group.indexes["hour"])
+    total = (tb.step * x).groupby(group).sum(skipna=False)
     return total / tb.duration[L]
 
 
@@ -1123,7 +1126,8 @@ def change_resolution(expr, tb: TimeBlocks, src: int | None, dst: int | None):
         if isinstance(i, pd.MultiIndex)
         for n in i.names
     }
-    assert set(out.coords) <= set(out.dims) | levels, set(out.coords)
+    if not set(out.coords) <= set(out.dims) | levels:
+        raise AssertionError(set(out.coords))
     return out
 
 
@@ -1167,19 +1171,27 @@ def add_to_balances(adequacy, expr, tb: TimeBlocks, src: int | None = None) -> N
         )
         for d in set(part.dims) & set(con.lhs.dims) - {"_term"}:
             # a left join would drop extra labels silently
-            assert part.indexes[d].isin(con.lhs.indexes[d]).all(), (
-                con.name,
-                d,
-            )
+            if not part.indexes[d].isin(con.lhs.indexes[d]).all():
+                raise AssertionError((con.name, d))
         con.lhs = con.lhs.add(part, join="left")  # by label, never position
-    assert sorted(routed) == sorted(
-        expr.indexes["resource"]
-    ), "resource not routed exactly once"
+    if sorted(routed) != sorted(expr.indexes["resource"]):
+        raise AssertionError("resource not routed exactly once")
 
 
+# The modules that have block objects: ``block_prefix`` and the H5 name rule read this one tuple
+BLOCK_MODULES = (
+    "adequacy",
+    "load_shedding",
+    "spillage",
+    "conversion",
+    "combined",
+    "flexdem",
+    "net_import",
+    "carbon",
+)
 # ``operation_<module>_block_{L}h_`` at the start of a name: a mode label inside an hourly name cannot match
 _BLOCK_NAME = re.compile(
-    r"operation_(?:adequacy|load_shedding|spillage|conversion|combined|flexdem|net_import|carbon)_block_\d+h_"
+    rf"operation_(?:{'|'.join(BLOCK_MODULES)})_block_\d+h_"
 )
 
 
@@ -1254,6 +1266,8 @@ def select_resources(p: Dataset, names, resources) -> Dataset:
 
 def block_prefix(module: str, L: int | None) -> str:
     """Row and variable name prefix of a group: today's for hourly, else the block one."""
+    if module not in BLOCK_MODULES:
+        raise ValueError(f"{module}: not in BLOCK_MODULES (the H5 name rule would miss it)")
     return f"operation_{module}_" if L is None else f"operation_{module}_block_{L}h_"
 
 

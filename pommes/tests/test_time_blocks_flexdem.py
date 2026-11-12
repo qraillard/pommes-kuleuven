@@ -252,3 +252,42 @@ def test_rolling_horizon_on_blocks():
     alone = _rolling_model(12, demand[1:], offset=4)
     assert alone.solve(solver_name="highs")[:2] == ("ok", "optimal")
     assert np.abs(_heat(alone) - whole[1:]).max() > 1.0
+
+
+def test_flexdem_on_two_coarse_lengths():
+    """Gas on 2 h blocks and heat on 4 h blocks, flexdem on both: each balance gets its own rows."""
+    p = coarse_step_dataset(4, 24)
+    flexible = p.flexdem_demand.copy(deep=True)
+    flexible.loc[dict(resource="gas")] = 0.5
+    p = with_blocks(
+        p.assign(flexdem_demand=flexible),
+        conversion={"well": 2, "heater": 4},
+        resource={"gas": 2, "heat": 4},
+        rule={"well": "mean", "heater": "mean"},
+    )
+    tb = time_blocks(p)
+    assert tb.balance_lengths == [2, 4] and tb.resources(2) == ["gas"] and tb.resources(4) == ["heat"]
+    m = solve_model(build_model(p))
+    check_block_dims(m)
+    for L, resource, blocks in ((2, "gas", 12), (4, "heat", 6)):
+        var = m.variables[f"operation_flexdem_block_{L}h_demand"]
+        assert list(var.labels.indexes["resource"]) == [resource]
+        assert var.labels.sizes[f"time_block_{L}h"] == blocks
+        assert (var.labels != -1).any()
+        assert f"operation_flexdem_block_{L}h_demand_conservation_8h" in m.constraints
+    assert (m.variables["operation_flexdem_demand"].labels == -1).all()  # nothing flexible is left hourly
+
+
+def test_flexdem_demand_without_hour_or_resource_dimension():
+    """A flexible demand given as a bare number: built, checked and solved on a coarse balance."""
+    p = coarse_step_dataset(4, 24)
+    p = p.assign(
+        flexdem_demand=xr.DataArray(0.5),
+        load_shedding_max_capacity=("resource", [np.nan, 0.0, 0.0]),  # idle holds nothing: it sheds the flexible demand
+        load_shedding_cost=("resource", [1000.0, 0.0, 0.0]),
+    )
+    m = solve_model(build_model(p))
+    check_block_dims(m)
+    var = m.variables[f"{BLOCK}demand"]
+    assert list(var.labels.indexes["resource"]) == ["gas", "heat"]
+    assert (var.labels != -1).any()

@@ -179,6 +179,93 @@ def hand_toy(
     return ds
 
 
+def _net_import_dataset(dt, resources, demand, price, factor=None) -> xr.Dataset:
+    """
+    net_import only, no conversion technology: one area, one ``year_op``, ``idle`` first.
+
+    ``demand``, ``price`` (import) and ``factor`` map a resource to its per-step list (a
+    number for ``factor`` is the same at every step); every other value is 0, and ``idle``
+    imports at price 1 (it holds nothing, R10). Export price 0, shedding and spillage capped at 0.
+    """
+    from pommes.model.data_validation import ref_inputs
+
+    n = len(dt)
+    names = ["idle", *resources]
+    ds = xr.Dataset(
+        coords=dict(
+            area=["a"],
+            hour=np.arange(n, dtype="int64"),
+            resource=names,
+            year_op=np.array([2030], dtype="int64"),
+        )
+    )
+    ds["time_step_duration"] = ("hour", np.array(dt, dtype="float64"))
+    ds["operation_year_duration"] = ("year_op", [8760.0])
+    ds["operation_day_duration"] = np.array(24, dtype="int64")
+    ds["discount_rate"] = ("year_op", [0.0])
+    ds["discount_factor"] = ("year_op", [1.0])
+    per_step = ("area", "hour", "resource", "year_op")
+    for name, values in (
+        ("demand", demand),
+        ("net_import_import_price", {"idle": 1.0, **price}),
+        ("net_import_emission_factor", factor or {}),
+        ("net_import_total_emission_factor", factor or {}),
+    ):
+        x = np.zeros((1, n, len(names), 1))
+        for resource, value in values.items():
+            x[0, :, names.index(resource), 0] = value
+        ds[name] = (per_step, x)
+    ds["net_import"] = np.array(True)
+    for name in ("load_shedding_max_capacity", "spillage_max_capacity"):
+        ds[name] = ("resource", np.zeros(len(names)))
+    for name in ("load_shedding_cost", "spillage_cost"):
+        ds[name] = ("resource", np.zeros(len(names)))
+    for name, spec in ref_inputs.items():
+        if name not in ds.variables:
+            ds[name] = np.array(spec["default"], dtype=spec["type"])
+    return ds
+
+
+def net_import_toy(
+    dt: list[float],
+    demand: list[float],
+    price: list[float],
+    factor: float | list[float] = 0.0,
+) -> xr.Dataset:
+    """
+    The net_import toy of section 16.2: steel comes from the rest of the world only.
+
+    One area, one ``year_op``, resources ``idle`` and ``steel``, **no conversion
+    technology**. Steel demand ``demand`` (energy per step) over the steps ``dt``,
+    import price ``price`` (per step, MWh), export price 0, emission factor
+    ``factor`` (a number or one per step); shedding and spillage capped at 0.
+    The objective is exactly ``n * sum(price_h * import_h)`` with ``n = toy_n(p)``.
+    """
+    return _net_import_dataset(
+        dt, ["steel"], {"steel": demand}, {"steel": price}, {"steel": factor}
+    )
+
+
+def net_import_pairs() -> xr.Dataset:
+    """
+    net_import on four resources, two hourly and two forced to 4 h blocks (H1, section 16.2).
+
+    Steps (1, 3) h; resources ``idle`` and ``h1`` stay hourly, ``c1`` and ``c2`` are forced
+    coarse (``resource_time_block_hrs`` 4), so the two subsets have the same size and a costs
+    partner restricted in another order would be paired by position. Distinct demands and
+    prices: ``h1`` (4, 6) for (2, 1) pays 14, ``c1`` (1, 10) for (2, 0) pays 15.5 (block mean
+    price 7.75), ``c2`` (2, 6) for (0, 3) pays 15 (block mean price 5), each times ``n``.
+    """
+    p = _net_import_dataset(
+        [1.0, 3.0],
+        ["h1", "c1", "c2"],
+        {"h1": [2, 1], "c1": [2, 0], "c2": [0, 3]},
+        {"h1": [4, 6], "c1": [1, 10], "c2": [2, 6]},
+        {"h1": [0.1, 0.2], "c1": [0.3, 0.4], "c2": [0.5, 0.6]},
+    )
+    return with_blocks(p, resource={"c1": 4, "c2": 4})
+
+
 def toy_n(p: xr.Dataset) -> float:
     """``operation_year_normalization`` of ``p`` (year duration over horizon)."""
     return float(p.operation_year_duration.item() / p.time_step_duration.sum())
@@ -810,11 +897,15 @@ def coarse_step_dataset(L: int, horizon: int, net_import: bool = False, carbon: 
     (``FLEXDEM_BLOCKS``, constant inside each block, next to a fixed demand) with load ratios 0.75 and 1.4, a
     conservation window of ``2 L`` hours and ramps of 0.03. Every conversion and combined ramp, mode-pair ramp and
     ``conversion_max_daily_production`` is NaN, and each availability is all-NaN or all-finite (C17,
-    ``check_coarse_step_contract``). ``net_import`` (Task 8) and ``carbon`` (Task 9) are not built yet.
+    ``check_coarse_step_contract``). ``net_import`` puts the rest of the world on ``heat`` (import, prices per
+    block ``HEAT_IMPORT_PRICE``, below the heater's cost) and on ``gas`` (export, prices ``GAS_EXPORT_PRICE``, above
+    the well's), prices and emission factors constant inside each block and different between blocks, with a
+    binding yearly import maximum on heat and a binding yearly export maximum on gas (area ``a``); gas imports at 50
+    and heat exports at 0, ``idle`` imports at 1. ``carbon`` (Task 9) is not built yet.
     ``coarse_step_reference(p, L)`` is the same system in today's code.
     """
-    if net_import or carbon:
-        raise NotImplementedError("net_import is built in Task 8 and carbon in Task 9")
+    if carbon:
+        raise NotImplementedError("carbon is built in Task 9")
     if horizon % L:
         raise ValueError(f"horizon {horizon} is not a multiple of L = {L}")
     p = combined_toy([1.0] * horizon)
@@ -840,6 +931,8 @@ def coarse_step_dataset(L: int, horizon: int, net_import: bool = False, carbon: 
         p[name] = (per, np.full(shape, value))
     p["flexdem_conservation_hrs"] = (per, np.full(shape, 2 * L, dtype="int64"))
     p = per_tech(p, "conversion_availability", {"heater": np.resize([1.0, 0.6, 0.9, 0.8, 0.5, 1.0, 0.7, 0.9], horizon)})
+    if net_import:
+        p = _with_net_import(p, L, horizon)
     for name in _NO_RAMPS:
         p[name] = xr.full_like(p[name], np.nan) if name in p else xr.DataArray(np.nan)
     techs = {t: L for t in p.conversion_tech.values}
@@ -851,6 +944,56 @@ def coarse_step_dataset(L: int, horizon: int, net_import: bool = False, carbon: 
     )
     check_coarse_step_contract(p)
     return p
+
+
+HEAT_IMPORT_PRICE = [0.2, 0.7, 0.4, 0.9, 0.3, 0.6]  # per block (cycled), below the combined technologies cost
+GAS_EXPORT_PRICE = [2.0, 6.0, 3.0, 8.0, 5.0, 9.0]  # per block (cycled), above the well's 0.5
+HEAT_IMPORT_MAX, GAS_EXPORT_MAX = 9.0, 4.0  # energy over the horizon, area a (probed: both bind)
+
+
+def _with_net_import(p: xr.Dataset, L: int, horizon: int) -> xr.Dataset:
+    """``p`` with the net_import of ``coarse_step_dataset``: prices and factors constant inside each block."""
+    names = list(p.resource.values)
+    per_step = ("area", "hour", "resource", "year_op")
+    shape = (p.sizes["area"], horizon, p.sizes["resource"], 1)
+    out = {"net_import": np.array(True)}
+    for name, fill in (
+        ("net_import_import_price", {"idle": 1.0, "gas": 50.0, "heat": np.repeat(np.resize(HEAT_IMPORT_PRICE, horizon // L), L)}),
+        ("net_import_export_price", {"gas": np.repeat(np.resize(GAS_EXPORT_PRICE, horizon // L), L)}),
+        ("net_import_emission_factor", {"heat": np.repeat(np.resize([0.2, 0.5, 0.1], horizon // L), L)}),
+        ("net_import_total_emission_factor", {"heat": np.repeat(np.resize([0.3, 0.6, 0.2], horizon // L), L)}),
+    ):
+        x = np.zeros(shape)
+        for resource, value in fill.items():
+            x[:, :, names.index(resource), :] = np.reshape(value, (1, -1, 1)) if np.ndim(value) else value
+        if name == "net_import_import_price":
+            x[1, :, names.index("heat"), :] = 20.0  # area b never imports heat: the yearly maximum is shared, and a tie would not be unique
+        out[name] = (per_step, x)
+    n = p.operation_year_duration / horizon  # the yearly rows carry the year normalisation
+    for name, resource, energy in (
+        ("net_import_max_yearly_energy_import", "heat", HEAT_IMPORT_MAX),
+        ("net_import_max_yearly_energy_export", "gas", GAS_EXPORT_MAX),
+    ):
+        x = np.full((p.sizes["area"], p.sizes["resource"], 1), np.nan)
+        x[0, names.index(resource), :] = energy * float(n.item())
+        out[name] = (("area", "resource", "year_op"), x)
+    return p.assign(out)
+
+
+def net_import_two_lengths() -> xr.Dataset:
+    """
+    ``coarse_step_dataset(4, 24, net_import=True)`` with gas on 2 h and heat on 4 h blocks (two coarse lengths).
+
+    The well makes gas on 2 h blocks and the heater heat on 4 h; the combined technologies stay hourly (their
+    contributions are summed into the coarse rows) and the idle resource stays hourly: three net_import groups.
+    """
+    p = coarse_step_dataset(4, 24, net_import=True)
+    return with_blocks(
+        p,
+        conversion={"well": 2, "heater": 4},
+        resource={"gas": 2, "heat": 4},
+        rule={"well": "mean", "heater": "mean"},
+    )
 
 
 def flexdem_block_dataset() -> xr.Dataset:
