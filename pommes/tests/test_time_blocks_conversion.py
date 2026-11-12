@@ -32,7 +32,7 @@ from pommes.tests.time_blocks_helper import (
     with_blocks,
     with_values,
 )
-from pommes.utils import check_block_dims, conversion_block_availability, time_blocks
+from pommes.utils import check_block_dims, day_of_blocks, conversion_block_availability, time_blocks
 
 ALL_KILNS = {t: 4 for t in KILNS}
 POWER_4H = "operation_conversion_block_4h_power"
@@ -469,3 +469,15 @@ def test_block_sums_per_year_op():
     np.testing.assert_allclose(produced.values, twin_produced.values, atol=1e-6)
     # the yearly maximum holds in 2030, where it is set: 8000 / n MWh in each area
     assert (produced.sel(year_op=2030).values <= 8000.0 / (8760.0 / 10) + 1e-6).all()
+
+
+def test_daily_cap_non_dyadic_steps():
+    """20-min steps, L = 6 on 48 h: a block starting an ulp below a day boundary stays in its day (R5 tolerance)."""
+    p = with_blocks(conversion_toy([1 / 3] * 144), conversion={t: 6 for t in KILNS})
+    p = with_values(p, "conversion_max_daily_production", {"kiln_b": 30.0 * 8760.0 / 144 * 3})
+    tb = tb_of(p)
+    assert day_of_blocks(tb, 6, 24).values.tolist() == [0] * 4 + [1] * 4
+    m, twin = _t2_pair(p, {t: 6 for t in KILNS})
+    free = solve_model(build_model(without(p, "conversion_max_daily_production")))
+    assert free.objective.value < m.objective.value - 1e-3  # the cap binds
+    assert_twin_equal(m, twin, tb, ["operation_conversion_block_6h_power"])

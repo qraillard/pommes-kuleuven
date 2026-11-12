@@ -1041,7 +1041,7 @@ def day_of_blocks(tb: TimeBlocks, L: int, d: int) -> DataArray:
     ``time_block_{L}h`` in block order (a groupby array, C4).
     """
     start = tb.start[L]
-    return (start // d).astype("int64").rename("day")
+    return np.floor((start + 1e-9) / d).astype("int64").rename("day")
 
 
 def longest_day_in_blocks(tb: TimeBlocks, L: int, d: int) -> DataArray:
@@ -1052,7 +1052,7 @@ def longest_day_in_blocks(tb: TimeBlocks, L: int, d: int) -> DataArray:
     block holds whole days; the last day of the horizon may be shorter.
     """
     step = tb.step.values.astype(float)
-    day = np.floor((np.cumsum(step) - step) / d).astype("int64")
+    day = np.floor((np.cumsum(step) - step + 1e-9) / d).astype("int64")
     per_day = pd.Series(step).groupby(
         [tb.block_of_hour[L].values, day]
     ).sum()

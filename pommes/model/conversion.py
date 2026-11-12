@@ -309,7 +309,8 @@ class _ConversionRows:
         mask = condition_mask(p, np.isfinite(p.conversion_max_daily_production))
         if self.L is None:
             start_time = p.time_step_duration.cumsum("hour") - p.time_step_duration
-            day = (start_time // p.operation_day_duration).astype("int64").rename("day")
+            # 1e-9: same tolerance as the block anchoring (R5), for non-dyadic steps
+            day = np.floor((start_time + 1e-9) / p.operation_day_duration).astype("int64").rename("day")
             self.add(
                 +norm * (p.time_step_duration * power).groupby(day).sum()
                 <= p.conversion_max_daily_production,
