@@ -737,7 +737,7 @@ equality forcing the power to be constant inside each block.
       - relaxation
     * - Coarse resource balance (derived or forced)
       - relaxation of the hourly balance: the block holds the energy of the block, not of each step; exact against the
-        model run with steps of :math:`L` hours when every contributor has the balance's length
+        model run with steps of :math:`L` hours when every contributor has the balance's length and the horizon is a multiple of :math:`L`
     * - Load shedding and spillage on a coarse resource
       - exact
     * - Flexible demand on a coarse balance
