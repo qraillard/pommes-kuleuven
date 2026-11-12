@@ -99,8 +99,19 @@ def _quiet(p):
     return p.assign(**{k: np.array(False) for k in ("carbon", "net_import", "turpe")})
 
 
+def _priced_spillage(p):
+    """A cost on every spillage: no free spilling, so the optimum is unique."""
+    n, k = p.sizes["resource"], p.sizes["conversion_tech"]
+    return p.assign(
+        spillage_cost=("resource", 1.0 + np.arange(n)),
+        # distinct variable costs: no tie between technologies either
+        conversion_variable_cost=p.conversion_variable_cost + 0.013 * np.arange(1, k + 1),
+    )
+
+
 def _forced_methane(parameters):
-    return with_blocks(_quiet(parameters), resource={"methane": 2})
+    p = _priced_spillage(_quiet(parameters))
+    return with_blocks(p, resource={"methane": 2})
 
 
 def _forced_process(parameters_dispatch_invest, process):
@@ -113,7 +124,7 @@ def test_forced_coarse_balance_sums_hourly_contributors(
     case, parameters, parameters_dispatch_invest, process
 ):
     if case == "methane":
-        flat = _quiet(parameters)
+        flat = _priced_spillage(_quiet(parameters))
         forced = _forced_methane(parameters)
     else:
         flat = _process_dataset(parameters_dispatch_invest, process)
