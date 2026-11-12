@@ -66,6 +66,26 @@ Indices and Index Sets
       - ``retrofit_year``
       - retrofit years
 
+    * - :math:`L`
+      - ``conversion_time_block_hrs``, ``combined_time_block_hrs``, ``resource_time_block_hrs``
+      - Length in hours of the time blocks of a conversion or combined technology, or forced length of a resource balance (``nan``: step resolution)
+
+    * - :math:`b \in \mathcal{B}_{L}`
+      - ``time_block_{L}h``
+      - Time blocks of length :math:`L` [h], anchored at the first step of the horizon
+
+    * - :math:`D_{L}(b)`
+      - derived
+      - Duration of block :math:`b`: the sum of the time step durations in it [h]
+
+    * - :math:`\Delta^0_{L}(b)`
+      - derived
+      - Duration of the first time step of block :math:`b` [h] (divisor of the block ramps)
+
+    * - :math:`\bar A_{b}`
+      - ``conversion_availability`` aggregated by ``conversion_time_block_rule``
+      - Availability of block :math:`b`: minimum (``min``) or duration-weighted mean (``mean``) of the step availabilities
+
 General Parameters
 ==================
 
