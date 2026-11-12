@@ -141,10 +141,10 @@ def build_model(model_parameters: Dataset) -> Model:
 
     def shedding_variables(q, coord, name):
         """Shedding and spillage powers of ``q`` on ``coord``, named ``name``."""
-        out = []
+        out = {}
         for kind in ("load_shedding", "spillage"):
             cap = q[f"{kind}_max_capacity"]
-            out.append(
+            out[kind] = (
                 m.add_variables(
                     name=f"operation_{kind}{name}_power",
                     lower=0,
@@ -156,9 +156,9 @@ def build_model(model_parameters: Dataset) -> Model:
             )
         return out
 
-    operation_load_shedding_power, operation_spillage_power = (
-        shedding_variables(p_h, p_h.hour, "")
-    )
+    hourly_power = shedding_variables(p_h, p_h.hour, "")
+    operation_load_shedding_power = hourly_power["load_shedding"]
+    operation_spillage_power = hourly_power["spillage"]
     block_power = {
         L: shedding_variables(p_L[L], tb.duration[L][block_dim(L)], f"_block_{L}h")
         for L in tb.balance_lengths
@@ -208,10 +208,12 @@ def build_model(model_parameters: Dataset) -> Model:
     )
 
     # Coarse balances, right after the hourly one (add_to_balances needs them)
-    for L, (shed, spill) in block_power.items():
+    for L, power in block_power.items():
+        shed, spill = power["load_shedding"], power["spillage"]
         q, D = p_L[L], tb.duration[L]
         demand = (
             q.demand.broadcast_like(p.hour)
+            .fillna(0)  # R8: a NaN demand reads as 0, as in the hourly row
             .groupby(tb.block_of_hour[L])
             .sum(skipna=False)
         )
@@ -223,13 +225,13 @@ def build_model(model_parameters: Dataset) -> Model:
 
     # Operation - load_shedding & spillage
 
-    for kind, hourly, blocks in (
-        ("load_shedding", operation_load_shedding_power, 0),
-        ("spillage", operation_spillage_power, 1),
+    for kind, hourly in (
+        ("load_shedding", operation_load_shedding_power),
+        ("spillage", operation_spillage_power),
     ):
         for q, var, name in [
             (p_h, hourly, ""),
-            *((p_L[L], block_power[L][blocks], f"_block_{L}h") for L in block_power),
+            *((p_L[L], block_power[L][kind], f"_block_{L}h") for L in block_power),
         ]:
             cap = q[f"{kind}_max_capacity"]
             m.add_constraints(
@@ -242,16 +244,16 @@ def build_model(model_parameters: Dataset) -> Model:
 
     # Costs - load_shedding & spillage
 
-    for kind, costs, hourly, blocks in (
-        ("load_shedding", operation_load_shedding_costs, operation_load_shedding_power, 0),
-        ("spillage", operation_spillage_costs, operation_spillage_power, 1),
+    for kind, costs, hourly in (
+        ("load_shedding", operation_load_shedding_costs, operation_load_shedding_power),
+        ("spillage", operation_spillage_costs, operation_spillage_power),
     ):
         expr = -costs + (
             p_h.time_step_duration * hourly * p_h[f"{kind}_cost"]
         ).sum(["hour", "resource"]) * operation_year_normalization
         for L in block_power:  # parts meet on [area, year_op, *cond]
             part = (
-                tb.duration[L] * block_power[L][blocks] * p_L[L][f"{kind}_cost"]
+                tb.duration[L] * block_power[L][kind] * p_L[L][f"{kind}_cost"]
             ).sum([block_dim(L), "resource"])
             expr = expr.add(part * operation_year_normalization, join="left")
         m.add_constraints(

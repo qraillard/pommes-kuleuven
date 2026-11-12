@@ -151,7 +151,6 @@ def hand_toy(
     ds["load_shedding_cost"] = ("resource", [0.0, 0.0])
     ds["spillage_max_capacity"] = ("resource", [np.nan, np.nan])
     ds["spillage_cost"] = ("resource", [0.0, s])
-    one = ("conversion_tech", [1.0])
     ds["conversion_factor"] = (("conversion_tech", "resource"), [[0.0, 1.0]])
     ds["conversion_variable_cost"] = ("conversion_tech", [v])
     ds["conversion_fixed_cost"] = ("conversion_tech", [a])
@@ -176,3 +175,62 @@ def hand_toy(
 def toy_n(p: xr.Dataset) -> float:
     """``operation_year_normalization`` of ``p`` (year duration over horizon)."""
     return float(p.operation_year_duration.item() / p.time_step_duration.sum())
+
+
+STEEL_DEMAND = [0, 2, 0, 2]
+
+
+def hand_toy_a(**kw) -> xr.Dataset:
+    """The hand toy of section 16.1 on hourly balances (``kw``: ``a``, ``v``, ``s``)."""
+    return hand_toy([1.0] * 4, STEEL_DEMAND, **kw)
+
+
+def hand_toy_b(**kw) -> xr.Dataset:
+    """``hand_toy_a`` with the steel balance forced to 2-hour blocks (section 16.1, case B)."""
+    return with_blocks(hand_toy_a(**kw), resource={"steel": 2})
+
+
+def priced_spillage(p: xr.Dataset) -> xr.Dataset:
+    """``p`` with a cost on every spillage and distinct variable costs: a unique optimum."""
+    n, k = p.sizes["resource"], p.sizes["conversion_tech"]
+    return p.assign(
+        spillage_cost=("resource", 1.0 + np.arange(n)),
+        conversion_variable_cost=p.conversion_variable_cost + 0.013 * np.arange(1, k + 1),
+    )
+
+
+def methane_hourly(parameters: xr.Dataset) -> xr.Dataset:
+    """The ``parameters`` fixture without carbon, net import and turpe, spillage priced."""
+    quiet = parameters.assign(
+        **{k: np.array(False) for k in ("carbon", "net_import", "turpe")}
+    )
+    return priced_spillage(quiet)
+
+
+def methane_forced(parameters: xr.Dataset) -> xr.Dataset:
+    """``methane_hourly`` with the methane balance forced to 2 h (storage, transport, conversion)."""
+    return with_blocks(methane_hourly(parameters), resource={"methane": 2})
+
+
+def process_hourly(parameters_dispatch_invest: xr.Dataset, process: xr.Dataset) -> xr.Dataset:
+    """The process fixture dataset, as ``test_process.py::parameters_process`` builds it."""
+    p = xr.merge([parameters_dispatch_invest, process])
+    p = p.sel(
+        area=["area_1"],
+        conversion_tech=["wind_onshore"],
+        resource=["electricity", "heat", "methane"],
+    ).copy(deep=True)
+    p["load_shedding_cost"].loc[dict(resource="methane")] = 5
+    p["demand"].loc[dict(resource="electricity")] = np.array([0, 0, 0, 0])
+    p["conversion_power_capacity_investment_max"] = 10
+    p["conversion_power_capacity_investment_min"] = 10
+    p["conversion_annuity_cost"] = 0
+    p["conversion_fixed_cost"] = 0
+    return p
+
+
+def process_forced(parameters_dispatch_invest: xr.Dataset, process: xr.Dataset) -> xr.Dataset:
+    """``process_hourly`` with the methane balance forced to 2 h."""
+    return with_blocks(
+        process_hourly(parameters_dispatch_invest, process), resource={"methane": 2}
+    )

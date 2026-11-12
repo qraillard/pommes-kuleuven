@@ -12,25 +12,9 @@ from pommes.tests.time_blocks_helper import (
     assert_t0,
     hand_toy,
     lp_text,
+    process_hourly,
     with_blocks,
 )
-
-
-def _process_dataset(parameters_dispatch_invest, process):
-    """As ``test_process.py::parameters_process`` builds it."""
-    p = xr.merge([parameters_dispatch_invest, process])
-    p = p.sel(
-        area=["area_1"],
-        conversion_tech=["wind_onshore"],
-        resource=["electricity", "heat", "methane"],
-    ).copy(deep=True)
-    p["load_shedding_cost"].loc[dict(resource="methane")] = 5
-    p["demand"].loc[dict(resource="electricity")] = np.array([0, 0, 0, 0])
-    p["conversion_power_capacity_investment_max"] = 10
-    p["conversion_power_capacity_investment_min"] = 10
-    p["conversion_annuity_cost"] = 0
-    p["conversion_fixed_cost"] = 0
-    return p
 
 
 def _transport_fuel_dataset(parameters):
@@ -64,7 +48,7 @@ def test_t0_lp_identical(case, request):
     if case in FIXTURES:
         p = request.getfixturevalue(case)
     elif case == "process":
-        p = _process_dataset(
+        p = process_hourly(
             request.getfixturevalue("parameters_dispatch_invest"),
             request.getfixturevalue("process"),
         )
