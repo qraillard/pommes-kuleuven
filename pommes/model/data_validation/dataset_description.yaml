@@ -214,6 +214,12 @@ combined_mode_ramp_up:
   type: float64
 
 
+combined_time_block_hrs:
+  default: nan
+  index_set:
+  - combined_tech
+  type: float64
+  description: "Block length in hours of the operation variables of a combined technology. NaN = hourly (the time step grid). Whole number of hours."
 combined_variable_cost:
   default: 0
   index_set:
@@ -385,6 +391,18 @@ conversion_ramp_up:
   - conversion_tech
   - year_op
   type: float64
+conversion_time_block_hrs:
+  default: nan
+  index_set:
+  - conversion_tech
+  type: float64
+  description: "Block length in hours of the operation variables of a conversion technology. NaN = hourly (the time step grid). Whole number of hours."
+conversion_time_block_rule:
+  default: "min"
+  index_set:
+  - conversion_tech
+  type: str
+  description: "How the hourly availability becomes a block value: min or mean. Read only for block technologies; nan, empty or missing read as min."
 conversion_variable_cost:
   default: 0
   index_set:
@@ -943,6 +961,12 @@ year_ref:
   default: 2000
   index_set: []
   type: int64
+resource_time_block_hrs:
+  default: nan
+  index_set:
+  - resource
+  type: float64
+  description: "Forces the length in hours of a resource balance. NaN = derived from the technologies that feed the resource. Whole number of hours."
 retrofit_conversion:
   default: 0
   index_set: []

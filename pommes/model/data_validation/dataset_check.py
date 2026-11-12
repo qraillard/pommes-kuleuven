@@ -1,6 +1,7 @@
 """Module with consistency check with reference configuration."""
 
 import logging
+import warnings
 
 import numpy as np
 import xarray as xr
@@ -8,7 +9,7 @@ from xarray import Dataset
 
 from pommes.model.annuity import infer_annuity_full_life
 from pommes.model.data_validation import ref_inputs
-from pommes.utils import has_operating_conditions
+from pommes.utils import has_operating_conditions, time_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,13 @@ def _check_expected_flags(ds: Dataset) -> None:
             )
 
 
+def check_time_blocks(ds: Dataset) -> None:
+    """Refuse bad block inputs (R1-R3, R8): the checks of ``time_blocks``, warnings silenced."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        time_blocks(ds)
+
+
 def check_inputs(ds: Dataset) -> Dataset:
     """
     Validate and update the input dataset.
@@ -298,5 +306,6 @@ def check_inputs(ds: Dataset) -> Dataset:
 
     check_operating_condition_weight(ds)
     _check_expected_flags(ds)
+    check_time_blocks(ds)
 
     return _complete_year_dec_with_ends_of_life(ds)

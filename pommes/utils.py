@@ -3,6 +3,7 @@
 import datetime
 import logging
 import os
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -545,3 +546,174 @@ def condition_dual_scale(p: Dataset) -> DataArray:
     """
     w = operating_condition_weight(p)
     return xr.DataArray(1.0) if w is None else w
+
+
+# --- Time blocks (multi-resolution) ---
+
+
+def block_dim(L: int) -> str:
+    """Name of the block dimension of length ``L`` hours, e.g. ``time_block_168h``."""
+    return f"time_block_{int(L)}h"
+
+
+def _per_label(p: Dataset, name: str, dim: str):
+    """Labels of ``dim`` and the values of ``p[name]`` along it (None if absent)."""
+    labels = p[dim].values if dim in p.coords else np.array([])
+    da = p.get(name)
+    if da is None:
+        return labels, None
+    if dim in da.dims:
+        da = da.reindex({dim: labels})
+    else:
+        da = da.expand_dims({dim: labels})
+    return labels, da.transpose(dim).values
+
+
+def _length_along(p: Dataset, name: str, dim: str, module: str | None):
+    """
+    Block length per label of ``dim``, NaN when absent (R1 on every present value).
+
+    ``module`` is the flag that switches the lengths off (None: always read).
+    """
+    labels, values = _per_label(p, name, dim)
+    values = (
+        np.full(len(labels), np.nan) if values is None else values.astype(float)
+    )
+    bad = ~np.isnan(values) & ~(
+        np.isfinite(values) & (values > 0) & (values == np.floor(values))
+    )
+    if bad.any():
+        k = np.flatnonzero(bad)[0]
+        raise ValueError(
+            f"{name}[{labels[k]}] = {values[k]}: a block length is a positive "
+            f"whole number of hours (or NaN for hourly)."
+        )
+    if module is not None and not (module in p and bool(p[module])):
+        values = np.full(len(labels), np.nan)
+    return xr.DataArray(values, dims=dim, coords={dim: labels})
+
+
+def conversion_block_rule(p: Dataset) -> DataArray:
+    """
+    Rule that turns the hourly availability into a block value, per conversion tech.
+
+    ``"min"`` or ``"mean"``; ``"nan"``, ``""``, float NaN and an absent
+    parameter read as ``"min"``. Any other value raises ``ValueError`` (R8).
+    """
+    labels, values = _per_label(p, "conversion_time_block_rule", "conversion_tech")
+    if values is None:
+        values = np.full(len(labels), "min", dtype=object)
+    rule = [
+        "min"
+        if (isinstance(x, float) and np.isnan(x)) or x in ("", "nan")
+        else x
+        for x in values.astype(object)
+    ]
+    for tech, x in zip(labels, rule):
+        if x not in ("min", "mean"):
+            raise ValueError(
+                f"conversion_time_block_rule[{tech}] = {x!r}: expected 'min' or 'mean'."
+            )
+    return xr.DataArray(
+        np.array(rule, dtype=str), dims="conversion_tech", coords={"conversion_tech": labels}
+    )
+
+
+@dataclass(frozen=True)
+class TimeBlocks:
+    """Block lengths and maps of one dataset, see ``time_blocks``."""
+
+    tech_length: dict[str, DataArray]
+    resource_length: DataArray
+    block_of_hour: dict[int, DataArray]
+    duration: dict[int, DataArray]
+    first_hour: dict[int, DataArray]
+    first_step_duration: dict[int, DataArray]
+    start: dict[int, DataArray]
+
+    @property
+    def active(self) -> bool:
+        """Whether any length in use is finite (otherwise the model is the hourly one)."""
+        arrays = [*self.tech_length.values(), self.resource_length]
+        return any(bool(np.isfinite(a.values).any()) for a in arrays)
+
+    def resources(self, L: int | None) -> list[str]:
+        """Resources whose balance has length ``L`` (None: hourly), in dataset order."""
+        r = self.resource_length
+        hit = r.isnull().values if L is None else (r == L).values
+        return [str(x) for x in r["resource"].values[hit]]
+
+    @property
+    def balance_lengths(self) -> list[int]:
+        """Distinct finite balance lengths, ascending."""
+        v = self.resource_length.values
+        return sorted({int(x) for x in v[np.isfinite(v)]})
+
+    def techs(self, module: str, L: int | None) -> list[str]:
+        """Technologies of ``module`` with length ``L`` (None: hourly), in dataset order."""
+        a = self.tech_length[module]
+        hit = a.isnull().values if L is None else (a == L).values
+        return [str(x) for x in a[f"{module}_tech"].values[hit]]
+
+
+def time_blocks(p: Dataset) -> TimeBlocks:
+    """
+    Block lengths and hour-to-block maps of the dataset ``p`` (pure function).
+
+    Blocks are anchored at the first step: ``start = cumsum(dt) - dt`` and
+    ``block = floor(start / L)``; the last block may be shorter. Raises
+    ``ValueError`` for R1 (length not a positive whole number), R2 (a step
+    crossing a block boundary), R3 (a non-positive or non-finite step) and R8
+    (unknown availability rule). Call it on the full input dataset, before
+    ``to_sparse_units``.
+    """
+    conversion_block_rule(p)  # R8
+    tech_length = {
+        module: _length_along(
+            p, f"{module}_time_block_hrs", f"{module}_tech", module
+        )
+        for module in ("conversion", "combined")
+    }
+    resource_length = _length_along(p, "resource_time_block_hrs", "resource", None)
+    lengths = sorted(
+        {
+            int(x)
+            for a in (*tech_length.values(), resource_length)
+            for x in a.values[np.isfinite(a.values)]
+        }
+    )
+    maps = {key: {} for key in ("block_of_hour", "duration", "first_hour", "first_step_duration", "start")}
+    if lengths:
+        dt = p["time_step_duration"]
+        hours = dt["hour"].values
+        d = dt.values.astype(float)
+        if not (np.isfinite(d) & (d > 0)).all():
+            k = np.flatnonzero(~(np.isfinite(d) & (d > 0)))[0]
+            raise ValueError(
+                f"time_step_duration[hour={hours[k]}] = {d[k]}: block lengths need "
+                f"positive finite time steps."
+            )
+        t0 = np.cumsum(d) - d
+        for L in lengths:
+            b = np.floor(t0 / L).astype("int64")
+            cross = t0 + d > (b + 1) * L + 1e-9
+            if cross.any():
+                k = np.flatnonzero(cross)[0]
+                raise ValueError(
+                    f"time_step_duration: the step at hour {hours[k]} (start "
+                    f"{t0[k]}, duration {d[k]}) crosses a block boundary of "
+                    f"length {L} h."
+                )
+            dim = block_dim(L)
+            nb = int(b.max()) + 1
+            coord = np.arange(nb, dtype="int64")
+            first = np.searchsorted(b, coord)  # b is non-decreasing
+            as_block = lambda v: xr.DataArray(v, dims=dim, coords={dim: coord})  # noqa: E731
+            maps["block_of_hour"][L] = xr.DataArray(
+                b, dims="hour", coords={"hour": hours}, name=dim
+            )
+            maps["duration"][L] = as_block(np.bincount(b, weights=d, minlength=nb))
+            maps["first_hour"][L] = as_block(hours[first])
+            maps["first_step_duration"][L] = as_block(d[first])
+            maps["start"][L] = as_block(t0[first])
+    return TimeBlocks(tech_length, resource_length, **maps)

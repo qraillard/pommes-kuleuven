@@ -194,6 +194,11 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
       - ['area', 'combined_tech', 'mode', 'year_op']
       - float64
 
+    * - combined_time_block_hrs
+      - nan
+      - ['combined_tech']
+      - float64
+
     * - combined_variable_cost
       - 0
       - ['area', 'combined_tech', 'mode', 'operating_condition', 'year_op']
@@ -313,6 +318,16 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
       - nan
       - ['area', 'conversion_tech', 'year_op']
       - float64
+
+    * - conversion_time_block_hrs
+      - nan
+      - ['conversion_tech']
+      - float64
+
+    * - conversion_time_block_rule
+      - min
+      - ['conversion_tech']
+      - str
 
     * - conversion_variable_cost
       - 0
@@ -713,6 +728,11 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
       - 2000
       - []
       - int64
+
+    * - resource_time_block_hrs
+      - nan
+      - ['resource']
+      - float64
 
     * - retrofit_conversion
       - 0
