@@ -286,9 +286,9 @@ def transport_t2_efficiency_dataset() -> xr.Dataset:
 
 
 def transport_t2_availability_dataset() -> xr.Dataset:
-    """T2: the availability of ``S`` is 1 for 20 h of each day, then 0.5, 0.5 and two NaN (read as 1)."""
-    day = [1.0] * 20 + [0.5, 0.5, np.nan, np.nan]
-    p = _transport_t2([1.0] * 48, {"H": 1.5, "S": 3.0}, availability={"S": day * 2})
+    """T2: the availability of ``S`` is 1 for 20 h of each day, then 0.5, 0.5 and two NaN on day 1, 0.8, 0.8 and two NaN on day 2 (NaN read as 1: block minima 0.5 and 0.8)."""
+    day = [1.0] * 20 + [0.5, 0.5, np.nan, np.nan] + [1.0] * 20 + [0.8, 0.8, np.nan, np.nan]
+    p = _transport_t2([1.0] * 48, {"H": 1.5, "S": 3.0}, availability={"S": day})
     return with_blocks(p, transport={"S": 24})
 
 
@@ -319,6 +319,34 @@ def transport_t2_hurdle_dataset() -> xr.Dataset:
     hurdle.loc[{"link": "ab", "transport_tech": "S", "year_op": 2035}] = 0.07
     hurdle.loc[{"link": "ab", "transport_tech": "H", "year_op": 2035}] = 0.09
     return with_blocks(p.assign(transport_hurdle_costs=hurdle), transport={"S": 24})
+
+
+def transport_t2_ramps_uneven_steps_dataset() -> xr.Dataset:
+    """
+    T2: steps of 2, 1 and 1 h repeated, L = 4 (each block starts with its long step: the ramp divisor 2 is neither
+    4/3 nor 4); ``S`` has availability 1, 0.4, 1, 0.4 per block, efficiency 0.8 and ramps 0.1, so that both ramp rows bind
+    and the power is not the power in.
+    """
+    avail = np.repeat([1.0, 0.4, 1.0, 0.4], 3)
+    p = _transport_t2([2.0, 1.0, 1.0] * 4, {"H": 1.5, "S": 3.0}, eff={"S": 0.8}, ramp={"S": (0.1, 0.1)}, availability={"S": avail})
+    return with_blocks(p, transport={"S": 4})
+
+
+def transport_t2_interior_dataset() -> xr.Dataset:
+    """
+    T2 interior: ships ``S`` (24 h, capped) and ``T`` (12 h, capacity free: its power maximum is slack in some blocks) and an hourly ``H``, a
+    demand that varies inside the blocks, steps of 2, 1 and 1 h, availability of ``S`` partly NaN, efficiency below 1,
+    60 h (a short last block of 12 h for ``S``).
+    """
+    dt = [2.0, 1.0, 1.0] * 15
+    avail = np.where(np.arange(45) % 5 == 2, np.nan, np.where(np.arange(45) % 7 == 0, 0.8, 1.0))
+    p = transport_toy(dt, [x + 1.0 for x in HEAT_RATE], techs=["H", "S", "T"], eff={"S": 0.9, "T": 0.8}, availability={"S": avail})
+    p["load_shedding_max_capacity"] = ("resource", [0.0, 50.0, 0.0])
+    p["load_shedding_cost"] = ("resource", [0.0, 4.0, 0.0])
+    cap = np.full((2, 3, 1), np.nan)
+    cap[:, 0], cap[:, 1] = 1.5, 3.2  # H and S are capped, T is not: the three ships carry
+    p["transport_power_capacity_max"] = (("link", "transport_tech", "year_op"), cap)
+    return with_blocks(p, transport={"S": 24, "T": 12})
 
 
 def lp_text(m) -> str:

@@ -68,19 +68,13 @@ def _refuse_unbuilt_rows(p_g: Dataset) -> None:
     """
     Interim guard: refuse an input whose rows the block groups do not build yet.
 
-    A finite ramp (clause removed by Task 4), a finite fuel consumption (Task
-    5) and a non-zero fuel emission factor with a finite fuel consumption
-    (Task 6, which removes the function).
+    A finite fuel consumption (Task 5) and a non-zero fuel emission factor
+    with a finite fuel consumption (Task 6, which removes the function).
     """
 
     def finite(name):
         return name in p_g and bool(np.isfinite(p_g[name]).any())
 
-    for name in ("transport_ramp_up", "transport_ramp_down"):
-        if finite(name):
-            raise NotImplementedError(
-                f"{name}: ramps on a block transport technology are not built yet."
-            )
     fuel = finite("transport_fuel_consumption")
     for name in (
         "transport_fuel_emission_factor",
@@ -264,10 +258,9 @@ class _TransportRows:
             add_to_balances(adequacy, -fuel_drawn, self.tb)
 
     def limits(self):
-        """Power bounds, delays, linepack and ramps (a block group: power maximum and power_in only for now)."""
+        """Power bounds, delays, linepack and ramps (a block group: power maximum, power_in and ramps)."""
         p, power, power_in = self.p, self.power, self.power_in
         level, capacity, pair = self.level, self.capacity, self.pair
-        T, first = self.T, self.first
         if self.L is not None:
             # a block group has no linepack and no delay: the hourly mask is
             # the pair mask. The availability is the block minimum
@@ -281,6 +274,7 @@ class _TransportRows:
                 "power_in_def",
                 mask=condition_mask(p, pair),
             )
+            self.ramps()
             return
 
         self.add(
@@ -358,6 +352,13 @@ class _TransportRows:
                 p, np.isfinite(p.transport_linepack_capacity) & pair
             ),
         )
+
+        self.ramps()
+
+    def ramps(self):
+        """Ramp rows on the hour axis or on the block axis (divisor: the first step of the block)."""
+        p, power, capacity, pair = self.p, self.power, self.capacity, self.pair
+        T, first = self.T, self.first
 
         # Operation - Transport unit commitment
 

@@ -25,7 +25,9 @@ from pommes.tests.time_blocks_helper import (
     transport_t2_availability_dataset,
     transport_t2_efficiency_dataset,
     transport_t2_hurdle_dataset,
+    transport_t2_interior_dataset,
     transport_t2_mixed_group_costs_dataset,
+    transport_t2_ramps_uneven_steps_dataset,
     transport_t2_short_last_block_dataset,
     transport_t2_two_lengths_dataset,
     transport_toy,
@@ -651,13 +653,6 @@ def test_partition_missing_a_tech_fires(monkeypatch):
 # --- interim guards (Tasks 2 to 5), deleted by the task that builds the rows ---
 
 
-def test_interim_guard_ramp():
-    for ramp in ({"S": (0.5, np.nan)}, {"S": (np.nan, 0.5)}):
-        with pytest.raises(NotImplementedError, match="ramp"):
-            build_model(toy_blocks(6, transport={"S": 3}, ramp=ramp))
-    build_model(toy_blocks(6, transport={"S": 3}, ramp={"H": (0.5, 0.5)}))
-
-
 def test_interim_guard_fuel():
     with pytest.raises(NotImplementedError, match="fuel"):
         build_model(toy_blocks(6, transport={"S": 3}, fuel={"S": 0.1}))
@@ -735,7 +730,7 @@ def test_block_power_rows_structure():
         check_block_dims(m)
         assert not [n for n in m.constraints if n.startswith(prefix) and ("delay" in n or "linepack" in n)]
         a = p.transport_availability.sel(transport_tech="S", link="ba", year_op=2030).fillna(1.0).values.reshape(2, 24).min(1)
-        assert a.tolist() == [0.5, 0.5]
+        assert a.tolist() == [0.5, 0.8]
         links = _pair_cells(p, "S")
         rows = terms(m, prefix + "power_max_constraint")
         assert {dict(r)["link"] for r in rows} == links and len(rows) == 2 * len(links)
@@ -809,7 +804,7 @@ def test_t2_availability_inside_blocks():
     m, twin = _compare_with_twin(p, {"S": 24})
     assert binds(m, "operation_transport_block_24h_power_max_constraint")
     cap = solved(m, "operation_transport_power_capacity").sel(transport_tech="S", link="ba").item()
-    np.testing.assert_allclose(solved(m, POWER24).sel(link="ba").values.ravel(), [0.5 * cap, 0.5 * cap])
+    np.testing.assert_allclose(solved(m, POWER24).sel(link="ba").values.ravel(), [0.5 * cap, 0.8 * cap])
 
 
 def test_t2_short_last_block():
@@ -839,3 +834,106 @@ def test_t2_hurdle_per_link_and_year():
     m, twin = _compare_with_twin(p, {"S": 24})
     assert list(m.variables[POWER24].labels.indexes["year_op"]) == [2030, 2035]
     assert_same(solved(m, "operation_transport_costs"), solved(twin, "operation_transport_costs"), "costs")
+
+
+# --- Task 4: ramps on blocks ---
+
+RAMP4 = "operation_transport_block_4h_"
+
+
+def _ramp_terms(m, p, name):
+    """{(link, block): (P_b coefficient, P_{b-1} coefficient, capacity coefficient)} of the live rows of ``name``."""
+    out = {}
+    for row, items in terms(m, RAMP4 + name).items():
+        row = dict(row)
+        at = {("link", row["link"]), ("transport_tech", "S"), ("year_op", 2030)}
+        b = row["time_block_4h"]
+        get = lambda var, extra: items.get((var, frozenset(at | extra)), 0.0)  # noqa: E731
+        out[(row["link"], b)] = (
+            get(RAMP4 + "power", {("time_block_4h", b)}),
+            get(RAMP4 + "power", {("time_block_4h", b - 1)}),
+            get("operation_transport_power_capacity", set()),
+        )
+        assert len(items) == 3 - (b == 0)
+    return out
+
+
+def _ramps_on(p, up, down):
+    """``p`` with ramps ``up`` / ``down`` on ``S``: {link: value}, NaN elsewhere."""
+    for name, cells in (("transport_ramp_up", up), ("transport_ramp_down", down)):
+        p = on_pairs(p, name, {(l, "S"): v for l, v in cells.items()}, np.nan, extra=True)
+    return p
+
+
+def test_ramp_rows_structure():
+    p = transport_t2_ramps_uneven_steps_dataset()
+    tb = time_blocks(p)
+    assert tb.first_step_duration[4].values.tolist() == [2.0] * 4  # the divisor is the first step, not D_b or D_b / n_b
+    assert tb.duration[4].values.tolist() == [4.0] * 4
+    d0 = 2.0
+    m = build_model(p)
+    check_block_dims(m)
+    for name, sign in (("ramp_up_constraint", 1.0), ("ramp_down_constraint", -1.0)):
+        rows = _ramp_terms(m, p, name)
+        assert set(rows) == {(l, b) for l in ("ab", "ba") for b in (1, 2, 3)}  # none on block 0
+        for cur, prev, cap in rows.values():
+            assert (cur, prev, cap) == pytest.approx((sign / d0, -sign / d0, -0.1))
+    # a ramp finite on one pair only, and the pair mask
+    q = _ramps_on(p, {"ab": 0.1, "ba": 0.1}, {"ba": 0.1})
+    m = build_model(q)
+    assert {l for l, _ in _ramp_terms(m, q, "ramp_up_constraint")} == {"ab", "ba"}
+    assert {l for l, _ in _ramp_terms(m, q, "ramp_down_constraint")} == {"ba"}
+    q = without_pair(_ramps_on(p, {"ab": 0.1, "ba": 0.1}, {"ab": 0.1, "ba": 0.1}), "ab", "S")
+    m = build_model(q)
+    for name in ("ramp_up_constraint", "ramp_down_constraint"):
+        assert {l for l, _ in _ramp_terms(m, q, name)} == {"ba"}
+    # no ramp, no row
+    m = build_model(_ramps_on(p, {}, {}))
+    assert not [n for n in m.constraints if n.startswith(RAMP4) and "ramp" in n and (m.constraints[n].labels >= 0).any()]
+
+
+def test_t2_ramps_uneven_steps():
+    p = transport_t2_ramps_uneven_steps_dataset()
+    m, twin = _compare_with_twin(p, {"S": 4})
+    for name in ("ramp_up_constraint", "ramp_down_constraint"):
+        row = m.constraints[RAMP4 + name]
+        assert int((row.labels >= 0).sum()) == 6
+        assert binds(m, RAMP4 + name)
+    assert float(abs(solved(m, RAMP4 + "power_in") - solved(m, RAMP4 + "power")).max()) > 0.1  # Pin is not P
+    # the ramps hold on P with the first step as divisor, and each is tight somewhere (the twin runs the same code, so it
+    # cannot see a swapped row or a ramp written on Pin: the solution does)
+    power = solved(m, RAMP4 + "power").sel(transport_tech="S")
+    cap = solved(m, "operation_transport_power_capacity").sel(transport_tech="S")
+    step = (power - power.shift(time_block_4h=1)) / 2.0
+    for rate in (step, -step):
+        assert float((rate - 0.1 * cap).where(cap > 1e-6).max()) == pytest.approx(0.0, abs=1e-6)  # a link with no ship has none
+    free = solve_model(build_model(_ramps_on(p, {}, {})))
+    assert abs(free.objective.value - m.objective.value) > 1.0  # the ramps matter
+
+
+def test_t1_with_ramps():
+    avail = [1.0, 0.4] * 8
+    p = _t2_steps3(avail)
+    m = solve_model(build_model(p))
+    hourly = solve_model(build_model(p.drop_vars(BLOCK_PARAMETERS, errors="ignore")))
+    assert binds(m, "operation_transport_block_3h_ramp_up_constraint") and binds(m, "operation_transport_block_3h_ramp_down_constraint")
+    assert_twin_equal(m, hourly, time_blocks(p), ["operation_transport_block_3h_power", "operation_transport_block_3h_power_in"])
+
+
+def _t2_steps3(avail):
+    from pommes.tests.time_blocks_helper import _transport_t2
+
+    p = _transport_t2([3.0] * 16, {"H": 1.5, "S": 3.0}, eff={"S": 0.8}, ramp={"S": (0.1, 0.1)}, availability={"S": avail})
+    return with_blocks(p, transport={"S": 3})
+
+
+def test_t2_interior():
+    p = transport_t2_interior_dataset()
+    m, _ = _compare_with_twin(p, {"S": 24, "T": 12})
+    power = solved(m, "operation_transport_block_24h_power")
+    assert len(np.unique(power.round(6).values)) > 2  # the flows vary from block to block
+    con = m.constraints["operation_transport_block_12h_power_max_constraint"]  # T: slack in some block
+    live = (con.vars != -1).any("_term")
+    assert bool(((con.rhs - con.lhs.solution).where(live) > 1e-6).any())
+    hourly = solve_model(build_model(p.drop_vars(BLOCK_PARAMETERS, errors="ignore")))
+    assert m.objective.value > hourly.objective.value + 1e-3  # holding the flow over the block costs something
