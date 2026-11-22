@@ -156,7 +156,11 @@ def add_transport(
           step the fuel is burnt (the injection step, also with a delay). If
           the supplier of the fuel already carries its emissions (an emission
           factor on the conversion that produces it, or on its import), leave
-          these factors at 0, or they are counted twice.
+          these factors at 0, or they are counted twice. When
+          ``transport_fuel_resource`` is not a resource of the model, nothing
+          is drawn from a balance, and the two factors still apply to the
+          consumption: a study can count the emissions of a fuel it does not
+          model.
         - ``transport_delay`` (link, transport_tech): hours between injection
           at the "from" end and delivery at the "to" end (loading, voyage,
           unloading): what arrives at hour h left at hour h - delay, cyclic

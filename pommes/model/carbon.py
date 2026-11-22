@@ -119,6 +119,13 @@ def add_carbon(
                 Ensures total carbon emissions correctly aggregate emissions
                 over time.
 
+        The fuel burnt by transport links (``transport_fuel_consumption`` per
+        unit injected) adds a term to the emissions of the arrival area of the
+        link: ``transport_fuel_emission_factor`` in
+        ``operation_carbon_emissions_def`` and
+        ``transport_fuel_total_emission_factor`` in
+        ``operation_total_carbon_emissions_def``.
+
         - *Costs*
             - ``operation_carbon_costs_def``
                 Defines carbon costs as a function of carbon tax and emissions.

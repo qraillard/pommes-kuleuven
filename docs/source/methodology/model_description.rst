@@ -524,7 +524,9 @@ link (``transport_area_to``), whatever ``transport_fuel_area`` is, at the step t
 also with a ``transport_delay``). A term is added only where a (link, technology) pair that exists burns fuel with a
 non-zero factor, so without the parameters (or at 0, or NaN) the model is unchanged. If the supplier of the fuel already
 carries its emissions (an emission factor on the conversion that produces it, or on its import), leave these factors at
-0, or the emissions are counted twice.
+0, or the emissions are counted twice. When ``transport_fuel_resource`` is not a resource of the model, no balance is
+drawn from and the factors still apply to the consumption, so a study can count the emissions of a fuel it does not
+model.
 
 The total emission constraint is in equation :eq:`emission-max`.
 

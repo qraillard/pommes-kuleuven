@@ -17,7 +17,8 @@ import xarray as xr
 import pommes
 from pommes.model.build_model import build_model
 from pommes.tests.conditions_helper import with_conditions
-from pommes.tests.time_blocks_helper import lp_text
+from pommes.tests.time_blocks_helper import lp_text, with_blocks
+from pommes.utils import time_blocks
 
 TAXED = 0.25  # tCO2 per MWh of fuel burnt, seen by the carbon tax
 TOTAL = 0.4  # tCO2 per MWh of fuel burnt, seen by the carbon goals
@@ -44,12 +45,12 @@ def parameters_transport(parameters_dispatch_invest, transport, carbon):
 
 
 def _one_way(parameters_transport, wind_area_1=(1.0, 1.0, 1.0), year_op=(2030,)):
-    """Link_1 from area_1 to area_2 over three hours; area 2 cannot generate; the link burns electricity."""
+    """Link_1 from area_1 to area_2 over as many hours as wind availabilities (three); area 2 cannot generate; the link burns electricity."""
     p = parameters_transport.sel(
         conversion_tech=["wind_onshore"],
         transport_tech=["power_line"],
         link=["link_1"],
-        hour=[0, 1, 2],
+        hour=list(range(len(wind_area_1))),
         resource=["electricity"],
         year_dec=[2040, 2050],
         year_inv=[2030],
@@ -301,3 +302,49 @@ def test_factor_non_zero_in_one_year_only(parameters_transport):
         extra = (s[name] - base[name]).sel(area="area_2")
         np.testing.assert_allclose(extra.transpose("year_op", "hour").values, (factor * burnt).transpose("year_op", "hour").values, atol=1e-9)
         np.testing.assert_allclose((s[name] - base[name]).sel(area="area_1").values, 0.0, atol=1e-9)
+
+
+def _balance_terms(m):
+    """The live terms (variable, coefficient) of each row of the balances (a masked term is not a draw)."""
+    lhs = m.constraints["operation_adequacy_constraint"].lhs
+    labels, coeffs = (a.transpose(..., "_term").values for a in (lhs.vars, lhs.coeffs))
+    live = (labels != -1) & (coeffs != 0)
+    return [sorted(zip(row[k].tolist(), c[k].tolist())) for row, c, k in zip(labels.reshape(-1, labels.shape[-1]), coeffs.reshape(-1, labels.shape[-1]), live.reshape(-1, labels.shape[-1]))]
+
+
+def test_fuel_that_is_not_a_resource_draws_nothing_but_still_emits(parameters_transport):
+    """A study counts the emissions of a fuel it does not model: no balance is touched, the two factors still apply."""
+    p = _one_way(parameters_transport)
+    p["transport_fuel_resource"] = xr.DataArray("bunker_oil")  # the model has electricity only
+    assert "bunker_oil" not in p.resource
+    _, base = _solve(p)
+    m, s = _solve(p, TAXED, TOTAL)
+    # the balances are those of a link that burns nothing, and not those of a fuel that would be modelled
+    assert _balance_terms(m) == _balance_terms(build_model(p.assign(transport_fuel_consumption=np.nan)))
+    assert _balance_terms(m) != _balance_terms(build_model(p.assign(transport_fuel_resource=xr.DataArray("electricity"))))
+    burnt = _burnt(s, p)
+    assert float(burnt.sum()) > 0
+    for name, factor in (("operation_carbon_emissions", TAXED), ("operation_total_carbon_emissions", TOTAL)):
+        extra = _extra(s, base, name)
+        np.testing.assert_allclose(extra.sel(area="area_2").values, factor * burnt.values, atol=1e-9)
+        np.testing.assert_allclose(extra.sel(area="area_1").values, 0.0, atol=1e-9)
+
+
+def test_emissions_with_time_blocks_on_another_module(parameters_transport):
+    """Wind on blocks of 3 h with an emission factor: the transport terms stay hourly, factor x fuel burnt in each row."""
+    p = _one_way(parameters_transport, wind_area_1=(1.0, 1.0, 1.0, 0.4, 0.4, 0.4))
+    p = p.assign(
+        conversion_emission_factor=p.conversion_emission_factor + 0.05,
+        demand=p.demand * xr.DataArray([1.0, 0.6, 1.0, 0.8, 0.5, 1.0], coords=[p.hour]),  # the flow, and the fuel, vary
+    )
+    p = with_blocks(p, conversion={"wind_onshore": 3})
+    assert time_blocks(p).active
+    _, base = _solve(p)
+    _, s = _solve(p, TAXED, TOTAL)
+    assert float(base.operation_carbon_emissions.sel(area="area_1").sum()) > 0  # the wind emits, in blocks
+    burnt = _burnt(s, p)
+    assert (burnt > 1e-6).sum() > 1 and not np.allclose(burnt, burnt[0])  # several hours, not all alike
+    for name, factor in (("operation_carbon_emissions", TAXED), ("operation_total_carbon_emissions", TOTAL)):
+        extra = _extra(s, base, name)
+        np.testing.assert_allclose(extra.sel(area="area_2").values, factor * burnt.values, atol=1e-9)
+        np.testing.assert_allclose(extra.sel(area="area_1").values, 0.0, atol=1e-9)

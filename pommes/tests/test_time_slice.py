@@ -389,16 +389,15 @@ def test_storages(parameters_storage_single_horizon):
     model = build_model(p)
     model.solve(solver_name="highs")
     s = model.solution.squeeze()
-    assert_equal(
-        s.operation_storage_power_in.to_numpy(),
-        np.array(
-            [14.0625, 20.0, 0.0, 0.0, -0.0, 20.0, -0.0, -0.0, -0.0, -0.0]
-        ),
-    )
-    assert_equal(
-        s.operation_storage_level.to_numpy(),
-        np.array([14.0625, 31.25, 25.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-    )
+    # The optimum is not unique (probed: objective capped, each hour of each variable minimised then maximised, and
+    # their sums over the hours): where the wind exceeds the demand, charging, discharging in the same hour or keeping
+    # energy that nothing uses costs nothing. The solver picks one of them, so only the objective and the hours the
+    # storage has to serve (2 and 3: the charge in and out, the level of hours 1 to 3, which carries the dissipation)
+    # are compared; the level equation below holds at every hour, tied or not.
+    assert_allclose(model.objective.value, 4562.5, rtol=1e-9)
+    assert_equal(s.operation_storage_power_in.to_numpy()[2:4], np.array([0.0, 0.0]))
+    assert_equal(s.operation_storage_power_out.to_numpy()[2:4], np.array([0.0, 20.0]))
+    assert_equal(s.operation_storage_level.to_numpy()[1:4], np.array([31.25, 25.0, 0.0]))
     assert_equal(s.planning_conversion_power_capacity, 100)
     for i in p.hour:
         assert_allclose(
@@ -434,38 +433,17 @@ def test_storages(parameters_storage_single_horizon):
     model = build_model(p)
     model.solve(solver_name="highs")
     s = model.solution.squeeze()
+    # Same ties as above (charging and discharging in the same hour, in hours 4 and 5 for instance): the objective and
+    # hours 2 and 3 (charge in and out, level of hours 1 to 3) are compared.
+    assert_allclose(model.objective.value, 7882.8125, rtol=1e-9)
     assert_allclose(
-        s.operation_storage_power_in.to_numpy(),
-        np.array(
-            [20.0, 20.0, 0.0, 0.0, 5.48791605, 15.0, 20.0, 20.0, 20.0, 10.0]
-        ),
-        rtol=1e-3,
-        atol=1e-3,
+        s.operation_storage_power_in.to_numpy()[2:4], np.array([0.0, 0.0]), rtol=1e-3, atol=1e-3
     )
     assert_allclose(
-        s.operation_storage_power_out.to_numpy(),
-        np.array([0.0, 0.0, -0.0, 20.0, 1.951664, 0.0, 0.0, 0.0, 0.0, 0.0]),
-        rtol=1e-3,
-        atol=1e-3,
+        s.operation_storage_power_out.to_numpy()[2:4], np.array([0.0, 20.0]), rtol=1e-3, atol=1e-3
     )
     assert_allclose(
-        s.operation_storage_level.to_numpy(),
-        np.array(
-            [
-                90.08789062,
-                97.65625,
-                62.5,
-                0.0,
-                7.07250369,
-                34.52640236,
-                62.09689751,
-                79.74201441,
-                91.03488922,
-                78.2623291,
-            ]
-        ),
-        rtol=1e-3,
-        atol=1e-3,
+        s.operation_storage_level.to_numpy()[1:4], np.array([97.65625, 62.5, 0.0]), rtol=1e-3, atol=1e-3
     )
     assert_equal(s.planning_conversion_power_capacity, 100)
     # hours 3 and 4 test the inflows and outflows

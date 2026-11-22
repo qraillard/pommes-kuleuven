@@ -113,15 +113,21 @@ def test_coarse_step_contract():
 
 
 @pytest.mark.parametrize(
-    "case, rows",
+    "case, rows, tied",
     [
-        (flexdem_block_dataset, ("demand_conservation_8h", "ramp_up_constraint", "ramp_down_constraint")),
-        (flexdem_ratio_dataset, ("demand_max", "demand_min")),
+        (flexdem_block_dataset, ("demand_conservation_8h", "ramp_up_constraint", "ramp_down_constraint"), False),
+        (flexdem_ratio_dataset, ("demand_max", "demand_min"), True),
     ],
     ids=["window_and_ramps", "ratios"],
 )
-def test_coarse_flexdem_equals_uniform_coarse_step(case, rows):
-    """T3(c): the block model equals today's code run with steps of 4 h; each row family it covers binds."""
+def test_coarse_flexdem_equals_uniform_coarse_step(case, rows, tied):
+    """
+    T3(c): the block model equals today's code run with steps of 4 h; each row family it covers binds.
+
+    With binding ratios and no ramp the optimum is not unique: the flexible heat of an area may go to another block at
+    the same cost (probed, objective capped, random weights: a block cell moves, its sum over the blocks does not), and
+    the solver picks one. That case (``tied``) is compared by the energy of each area, over the blocks.
+    """
     p = case()
     m = solve_model(build_model(p))
     reference_dataset = coarse_step_reference(p, 4)
@@ -129,7 +135,11 @@ def test_coarse_flexdem_equals_uniform_coarse_step(case, rows):
     assert m.objective.value == pytest.approx(reference.objective.value, rel=1e-7)
     block = solved(m, f"{BLOCK}demand").transpose("area", "resource", "time_block_4h", "year_op")
     step = solved(reference, "operation_flexdem_demand").transpose("area", "resource", "hour", "year_op")
-    np.testing.assert_allclose(block.values, step.sel(resource=block.resource).values, atol=1e-6)
+    step = step.sel(resource=block.resource)
+    if tied:
+        np.testing.assert_allclose(block.sum("time_block_4h").values, step.sum("hour").values, atol=1e-6)
+    else:
+        np.testing.assert_allclose(block.values, step.values, atol=1e-6)
     heat_demand = reference_dataset.flexdem_demand.sel(resource="heat").transpose("area", "hour", "year_op").values
     assert np.abs(block.sel(resource="heat").values - heat_demand[:, :, None, :].squeeze(2)).max() > 0.1  # demand shifts
     for name in rows:
