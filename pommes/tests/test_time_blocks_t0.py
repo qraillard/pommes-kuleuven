@@ -221,3 +221,41 @@ def test_t0_transport_hourly_with_conversion_blocks(monkeypatch):
     assert _transport_description(m) == expected
     assert len(received) == 1 and received[0] is returned["operation_transport_power_capacity"]
     assert guarded == []
+
+
+HOURLY_TRANSPORT_ORDER = [
+    "operation_transport_power_max_constraint",
+    "operation_transport_power_in_def",
+    "operation_transport_power_in_def_delay_1",
+    "operation_transport_power_in_def_delay_2",
+    "operation_transport_linepack_level_def",
+    "operation_transport_linepack_level_max_constraint",
+    "operation_transport_power_in_max_constraint",
+    "operation_transport_ramp_up_constraint",
+    "operation_transport_ramp_down_constraint",
+    "operation_transport_power_capacity_def",
+    "operation_transport_net_generation_def",
+    "operation_transport_power_capacity_max_constraint",
+    "operation_transport_power_capacity_min_constraint",
+    "planning_transport_power_capacity_min_constraint",
+    "planning_transport_power_capacity_max_constraint",
+    "planning_transport_power_capacity_def",
+    "operation_transport_costs_def",
+    "planning_transport_costs_def",
+]
+
+
+def test_transport_statement_order():
+    """The LP of 0.7.1+kul depends on the order of the transport statements: names only, no number."""
+    p = transport_every_row_dataset()
+    names = [n for n in build_model(p).constraints if "transport" in n]
+    assert names == HOURLY_TRANSPORT_ORDER
+    # plus a block ship without delay, linepack or ramp: the hourly names keep their order, the block names come last
+    src = p.sel(transport_tech=["power_line"]).assign_coords(transport_tech=["ship"])
+    q = xr.concat([p, src], dim="transport_tech", data_vars="minimal", coords="minimal", compat="override")
+    for name, fill in (("transport_delay", 0.0), ("transport_linepack_capacity", np.nan), ("transport_ramp_up", np.nan), ("transport_ramp_down", np.nan)):
+        q[name] = q[name].where(q.transport_tech != "ship", fill)
+    names = [n for n in build_model(with_blocks(q, transport={"ship": 2})).constraints if "transport" in n]
+    blocks = [n for n in names if n.startswith("operation_transport_block_")]
+    assert blocks and names[len(names) - len(blocks) :] == blocks
+    assert names[: len(names) - len(blocks)] == HOURLY_TRANSPORT_ORDER

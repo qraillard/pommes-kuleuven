@@ -1102,6 +1102,32 @@ def conversion_block_availability(
     return xr.where(rule == "mean", mean, smallest)
 
 
+def transport_block_availability(
+    p: Dataset, tb: TimeBlocks, L: int, techs: list[str]
+) -> DataArray:
+    """
+    Block availability of the transport ``techs`` of length ``L`` (section 5).
+
+    ``Ã`` (NaN read as 1, before the aggregation) then the ``min`` over each
+    block, each operating condition aggregated alone: on ``[link,
+    transport_tech(techs), time_block_{L}h, operating_condition, year_op]``.
+    Without ``hour`` the availability is constant in time and comes back as
+    ``Ã`` itself; an absent parameter reads as 1. Call it on the full ``p``.
+    """
+    if "transport_availability" not in p:
+        return xr.DataArray(1.0)
+    a = p["transport_availability"]
+    if "transport_tech" in a.dims:
+        a = a.sel(transport_tech=techs)
+    a = xr.where(np.isfinite(a), a, 1.0)
+    if "hour" not in a.dims:
+        return a
+    group = tb.block_of_hour[L]
+    check_group(group, None)
+    check_axis(a, "hour", group.indexes["hour"])
+    return a.groupby(group).min()
+
+
 def day_of_blocks(tb: TimeBlocks, L: int, d: int) -> DataArray:
     """
     Day of each block of ``L`` hours when it lies inside a day (section 8.5).

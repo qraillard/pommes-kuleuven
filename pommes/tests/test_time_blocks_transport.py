@@ -3,6 +3,7 @@
 import warnings
 
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
@@ -13,12 +14,30 @@ from pommes.model.data_validation.dataset_check import (
     check_time_blocks,
 )
 from pommes.model.transport import transport_groups
-from pommes.tests.time_blocks_helper import transport_toy, with_blocks
+from pommes.tests.time_blocks_helper import (
+    BLOCK_PARAMETERS,
+    assert_same,
+    assert_twin_equal,
+    binds,
+    flat_twin,
+    solve_model,
+    solved,
+    transport_t2_availability_dataset,
+    transport_t2_efficiency_dataset,
+    transport_t2_hurdle_dataset,
+    transport_t2_mixed_group_costs_dataset,
+    transport_t2_short_last_block_dataset,
+    transport_t2_two_lengths_dataset,
+    transport_toy,
+    with_blocks,
+)
 from pommes.utils import (
     TimeBlocks,
     check_block_dims,
     check_block_transport,
+    expand_to_hours,
     time_blocks,
+    transport_block_availability,
     transport_pair_exists,
 )
 
@@ -568,7 +587,7 @@ def break_block_rows(monkeypatch, tweak=None, after=None):
 
 
 def test_partner_in_another_order_fires(monkeypatch):
-    """H1: the capacity restricted in another order is refused in ``costs_def`` (the group guard, xarray's alignment, or the order assert of the sparse fold)."""
+    """H1: the capacity restricted in another order is refused in ``costs_def`` (the group guard, or xarray's alignment)."""
 
     def reverse(args):
         capacity = args[5]
@@ -577,7 +596,7 @@ def test_partner_in_another_order_fires(monkeypatch):
     p = toy_blocks(6, transport={"H": 3, "S": 3})
     build_model(p)
     break_block_rows(monkeypatch, tweak=reverse)
-    with pytest.raises((RuntimeError, ValueError, AssertionError), match="transport_tech"):
+    with pytest.raises((RuntimeError, ValueError), match="transport_tech"):
         build_model(p)
 
 
@@ -657,3 +676,166 @@ def test_interim_guard_emissions():
     build_model(factors(toy_blocks(6, transport={"S": 3}, fuel={"H": 0.1}), "H"))
     # a factor without fuel on the block ship is no emission
     build_model(factors(toy_blocks(6, transport={"S": 3}), "S"))
+
+
+# --- Task 3: block availability, power maximum, power_in with efficiency ---
+
+DAY = [1.0] * 20 + [0.5, 0.5, np.nan, np.nan]
+POWER24, POWER_IN24 = "operation_transport_block_24h_power", "operation_transport_block_24h_power_in"
+
+
+def test_transport_block_availability():
+    p = toy_blocks(48, transport={"S": 24}, availability={"S": DAY + [np.nan] * 24})
+    tb = time_blocks(p)
+    got = transport_block_availability(p, tb, 24, ["S", "H"])
+    assert list(got.indexes["transport_tech"]) == ["S", "H"]
+    # NaN reads as 1 before the minimum; a block of NaN gives 1; the tech without availability gives 1
+    np.testing.assert_allclose(got.sel(transport_tech="S", link="ab", year_op=2030).values, [0.5, 1.0])
+    np.testing.assert_allclose(got.sel(transport_tech="H", link="ab", year_op=2030).values, [1.0, 1.0])
+    assert got.sizes["time_block_24h"] == 2 and "hour" not in got.dims
+    # two operating conditions are aggregated each alone
+    b = xr.DataArray(np.ones(48), dims="hour", coords={"hour": p.hour})
+    b[3] = 0.7
+    a = p.transport_availability.sel(transport_tech=["S"]).squeeze(drop=True)
+    both = xr.concat([a, a * 0 + b], dim=pd.Index(["x", "y"], name="operating_condition"))
+    q = p.assign(transport_availability=both.broadcast_like(p.transport_availability))
+    got = transport_block_availability(q, tb, 24, ["S"])
+    assert {"operating_condition", "time_block_24h"} <= set(got.dims)
+    s = got.sel(transport_tech="S", link="ab", year_op=2030)
+    np.testing.assert_allclose(s.sel(operating_condition="x").values, [0.5, 1.0])
+    np.testing.assert_allclose(s.sel(operating_condition="y").values, [0.7, 1.0])
+    # no hour: the value itself, NaN read as 1
+    flat = p.assign(transport_availability=xr.where(p.transport_availability.isel(hour=0, drop=True).isnull(), np.nan, 0.4))
+    out = transport_block_availability(flat, tb, 24, ["S", "H"])
+    assert "hour" not in out.dims and "time_block_24h" not in out.dims
+    np.testing.assert_allclose(out.sel(transport_tech="S").values, 0.4)
+    np.testing.assert_allclose(out.sel(transport_tech="H").values, 1.0)
+    # absent parameter: 1.0
+    assert float(transport_block_availability(p.drop_vars("transport_availability"), tb, 24, ["S"])) == 1.0
+
+
+def test_block_group_has_no_hourly_availability():
+    p = toy_blocks(48, transport={"S": 24}, availability={"S": DAY * 2, "H": DAY * 2})
+    groups = dict((L, g) for L, g, _ in transport_groups(p, time_blocks(p)))
+    assert "transport_block_availability" in groups[24] and "transport_availability" not in groups[24]
+    assert "transport_availability" in groups[None] and "transport_block_availability" not in groups[None]
+    assert list(groups[24].transport_block_availability.indexes["transport_tech"]) == ["S"]
+
+
+def _pair_cells(p, tech):
+    pair = transport_pair_exists(p).sel(transport_tech=tech)
+    return {l for l in pair.link.values if bool(pair.sel(link=l))}
+
+
+def test_block_power_rows_structure():
+    prefix = "operation_transport_block_24h_"
+    for p in (transport_t2_availability_dataset(), without_pair(transport_t2_availability_dataset(), "ab", "S")):
+        p = p.assign(transport_efficiency=transport_t2_efficiency_dataset().transport_efficiency)
+        m = build_model(p)
+        check_block_dims(m)
+        assert not [n for n in m.constraints if n.startswith(prefix) and ("delay" in n or "linepack" in n)]
+        a = p.transport_availability.sel(transport_tech="S", link="ba", year_op=2030).fillna(1.0).values.reshape(2, 24).min(1)
+        assert a.tolist() == [0.5, 0.5]
+        links = _pair_cells(p, "S")
+        rows = terms(m, prefix + "power_max_constraint")
+        assert {dict(r)["link"] for r in rows} == links and len(rows) == 2 * len(links)
+        for row, items in rows.items():
+            row = dict(row)
+            at = {("link", row["link"]), ("transport_tech", "S"), ("year_op", 2030)}
+            cap = ("operation_transport_power_capacity", frozenset(at))
+            power = (prefix + "power", frozenset(at | {("time_block_24h", row["time_block_24h"])}))
+            assert items == pytest.approx({power: 1.0, cap: -float(a[row["time_block_24h"]])})
+        rows = terms(m, prefix + "power_in_def")
+        assert {dict(r)["link"] for r in rows} == links and len(rows) == 2 * len(links)
+        for row, items in rows.items():
+            row = dict(row)
+            at = {("link", row["link"]), ("transport_tech", "S"), ("year_op", 2030), ("time_block_24h", row["time_block_24h"])}
+            eff = float(p.transport_efficiency.sel(link=row["link"], transport_tech="S", year_op=2030))
+            assert eff == (0.8 if row["link"] == "ba" else 1.0)
+            assert items == pytest.approx({(prefix + "power_in", frozenset(at)): eff, (prefix + "power", frozenset(at)): -1.0})
+        for name in ("power_max_constraint", "power_in_def"):  # the mask is the pair mask
+            live = m.constraints[prefix + name].labels.sel(transport_tech="S") >= 0
+            assert {l for l in live.link.values if bool(live.sel(link=l).all())} == links
+    # the hourly group's rows keep the hourly availability on the hour axis
+    m = build_model(transport_t2_availability_dataset().assign(transport_availability=lambda d: d.transport_availability.fillna(0.9)))
+    assert "hour" in m.constraints["operation_transport_power_max_constraint"].labels.dims
+
+
+def test_transport_block_equals_step_power_rows():
+    base = transport_t2_availability_dataset().assign(transport_efficiency=transport_t2_efficiency_dataset().transport_efficiency)
+    p = with_blocks(base.drop_vars(BLOCK_PARAMETERS, errors="ignore"), transport={"S": 1})
+    m, hourly = solve_model(build_model(p)), solve_model(build_model(p.drop_vars(BLOCK_PARAMETERS, errors="ignore")))
+    assert m.objective.value > 0
+    assert_twin_equal(m, hourly, time_blocks(p), ["operation_transport_block_1h_power", "operation_transport_block_1h_power_in"])
+
+
+# --- T2: the flat twin ---
+
+
+def _compare_with_twin(p, lengths):
+    """Block model against its flat twin (T2): objective, capacities, flows, net generation, adequacy duals."""
+    m, twin = solve_model(build_model(p)), solve_model(flat_twin(p, transport=lengths))
+    tb = time_blocks(p)
+    check_block_dims(m)
+    powers = [f"operation_transport_block_{L}h_{k}" for L in sorted(set(lengths.values())) for k in ("power", "power_in")]
+    assert_twin_equal(m, twin, tb, powers)
+    hourly = [t for t in p.indexes["transport_tech"] if t not in lengths]
+    for name in ("operation_transport_power", "operation_transport_power_in"):
+        if hourly:
+            assert_same(solved(m, name).sel(transport_tech=hourly), solved(twin, name).sel(transport_tech=hourly), name)
+    for L in sorted(set(lengths.values())):
+        techs = [t for t, v in lengths.items() if v == L]
+        ng = expand_to_hours(solved(m, f"operation_transport_block_{L}h_net_generation"), tb, "energy")
+        assert_same(ng, solved(twin, "operation_transport_net_generation").sel(transport_tech=techs), f"NG {L}")
+    a, b = m.constraints["operation_adequacy_constraint"].dual, twin.constraints["operation_adequacy_constraint"].dual
+    a, b = xr.align(a, b, join="exact")
+    np.testing.assert_allclose(a.values, b.transpose(*a.dims).values, rtol=1e-6, atol=1e-6 * float(abs(b).max()))
+    return m, twin
+
+
+def test_t2_efficiency():
+    m, twin = _compare_with_twin(transport_t2_efficiency_dataset(), {"S": 24})
+    assert binds(m, "operation_transport_block_24h_power_max_constraint")
+    pin, power = solved(m, POWER_IN24), solved(m, POWER24)
+    assert float(abs(pin - power).max()) > 0.1  # the losses are real
+    # a dropped efficiency changes the optimum
+    q = transport_t2_efficiency_dataset()
+    lossless = solve_model(build_model(q.assign(transport_efficiency=q.transport_efficiency.where(q.transport_tech != "S", 1.0))))
+    assert abs(lossless.objective.value - m.objective.value) > 1.0
+
+
+def test_t2_availability_inside_blocks():
+    p = transport_t2_availability_dataset()
+    m, twin = _compare_with_twin(p, {"S": 24})
+    assert binds(m, "operation_transport_block_24h_power_max_constraint")
+    cap = solved(m, "operation_transport_power_capacity").sel(transport_tech="S", link="ba").item()
+    np.testing.assert_allclose(solved(m, POWER24).sel(link="ba").values.ravel(), [0.5 * cap, 0.5 * cap])
+
+
+def test_t2_short_last_block():
+    p = transport_t2_short_last_block_dataset()
+    assert time_blocks(p).duration[24].values.tolist() == [24.0, 24.0, 12.0]
+    m, _ = _compare_with_twin(p, {"S": 24})
+    assert binds(m, "operation_transport_block_24h_power_max_constraint")
+
+
+def test_t2_two_lengths():
+    m, _ = _compare_with_twin(transport_t2_two_lengths_dataset(), {"S": 12, "T": 24})
+    for name in ("operation_transport_costs_def", "operation_transport_block_12h_costs_def", "operation_transport_block_24h_costs_def"):
+        assert name in m.constraints
+
+
+def test_t2_mixed_group_costs():
+    p = transport_t2_mixed_group_costs_dataset()
+    m, twin = _compare_with_twin(p, {"S": 24})
+    assert (solved(m, "operation_transport_power").sum() > 0) and (solved(m, POWER24).sum() > 0)  # both ships carry
+    cost = solved(m, "operation_transport_costs")
+    assert float(cost.sel(transport_tech="H").sum()) > 0 and float(cost.sel(transport_tech="S").sum()) > 0
+    assert_same(cost, solved(twin, "operation_transport_costs"), "costs")
+
+
+def test_t2_hurdle_per_link_and_year():
+    p = transport_t2_hurdle_dataset()
+    m, twin = _compare_with_twin(p, {"S": 24})
+    assert list(m.variables[POWER24].labels.indexes["year_op"]) == [2030, 2035]
+    assert_same(solved(m, "operation_transport_costs"), solved(twin, "operation_transport_costs"), "costs")

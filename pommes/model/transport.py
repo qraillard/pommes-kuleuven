@@ -19,6 +19,7 @@ from pommes.utils import (
     condition_mask,
     expected_over_conditions,
     time_blocks,
+    transport_block_availability,
     transport_pair_exists,
 )
 
@@ -31,7 +32,8 @@ def transport_groups(
 
     ``L`` is None for the hourly technologies, else a block length
     (ascending); a group without technology is left out. ``p_g`` is
-    ``p.sel(transport_tech=techs_g)``; a block group holds no
+    ``p.sel(transport_tech=techs_g)``; a block group holds
+    ``transport_block_availability`` (computed on the full ``p``) and no
     ``transport_availability`` (the only transport parameter with an ``hour``
     dimension). Without a block length on a transport technology (conversion
     blocks included) there is one group, ``(None, p, None)``, ``p`` itself.
@@ -52,6 +54,11 @@ def transport_groups(
         else:
             p_g = p.drop_vars("transport_availability", errors="ignore").sel(
                 transport_tech=list(part)
+            )
+            p_g = p_g.assign(
+                transport_block_availability=transport_block_availability(
+                    p, tb, L, list(part)
+                )
             )
         out.append((L, p_g, None))
     return out
@@ -257,12 +264,24 @@ class _TransportRows:
             add_to_balances(adequacy, -fuel_drawn, self.tb)
 
     def limits(self):
-        """Power bounds, delays, linepack and ramps (the hourly group only for now)."""
-        if self.L is not None:
-            return
+        """Power bounds, delays, linepack and ramps (a block group: power maximum and power_in only for now)."""
         p, power, power_in = self.p, self.power, self.power_in
         level, capacity, pair = self.level, self.capacity, self.pair
         T, first = self.T, self.first
+        if self.L is not None:
+            # a block group has no linepack and no delay: the hourly mask is
+            # the pair mask. The availability is the block minimum
+            self.add(
+                power - capacity * p.transport_block_availability <= 0,
+                "power_max_constraint",
+                mask=condition_mask(p, pair),
+            )
+            self.add(
+                power_in * p.transport_efficiency - power == 0,
+                "power_in_def",
+                mask=condition_mask(p, pair),
+            )
+            return
 
         self.add(
             power

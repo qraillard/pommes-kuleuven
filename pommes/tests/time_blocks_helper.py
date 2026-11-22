@@ -255,6 +255,72 @@ def transport_toy(dt: list[float], rate: list[float] | None = None, **kw) -> xr.
     return ds
 
 
+def _transport_t2(dt, caps, techs=("H", "S"), **kw):
+    """
+    ``transport_toy`` made non-degenerate for the twin tests: cargo may be shed at a finite cost, and every ship is
+    capped (``caps``: tech -> capacity maximum, MW, on every link) below the demand, which is always above 7 MW, so
+    that the shedding and the ship capacities bind in every hour; the mill is fixed above its output (no conversion row
+    binds). The optimum and the adequacy duals are then unique.
+    """
+    rate = [x + 6.0 for x in HEAT_RATE]
+    p = transport_toy(dt, rate, techs=list(techs), **kw)
+    p["load_shedding_max_capacity"] = ("resource", [0.0, 50.0, 0.0])
+    p["load_shedding_cost"] = ("resource", [0.0, 4.0, 0.0])
+    cap = np.full((2, len(techs), 1), np.nan)
+    for tech, value in caps.items():
+        cap[:, list(techs).index(tech), :] = value
+    p["transport_power_capacity_max"] = (("link", "transport_tech", "year_op"), cap)
+    # the mill's capacity is fixed above its output, so that no conversion row binds and the balance duals are unique
+    p["conversion_power_capacity_max"] = (("area", "conversion_tech"), [[10.0, np.nan], [0.0, np.nan]])
+    p["conversion_power_capacity_min"] = (("area", "conversion_tech"), [[10.0, 0.0], [0.0, 0.0]])
+    return p
+
+
+def transport_t2_efficiency_dataset() -> xr.Dataset:
+    """T2: 0.8 on the link ``ba`` of the block ship ``S`` (a to b) and 1 on ``ab``; the hourly ``H`` has 0.9 on ``ab``."""
+    p = _transport_t2([1.0] * 48, {"H": 1.5, "S": 3.0}, eff={"H": 0.9, "S": 0.8})
+    e = p["transport_efficiency"].copy()
+    e.loc[{"link": "ab", "transport_tech": "S"}] = 1.0
+    e.loc[{"link": "ba", "transport_tech": "H"}] = 1.0
+    return with_blocks(p.assign(transport_efficiency=e), transport={"S": 24})
+
+
+def transport_t2_availability_dataset() -> xr.Dataset:
+    """T2: the availability of ``S`` is 1 for 20 h of each day, then 0.5, 0.5 and two NaN (read as 1)."""
+    day = [1.0] * 20 + [0.5, 0.5, np.nan, np.nan]
+    p = _transport_t2([1.0] * 48, {"H": 1.5, "S": 3.0}, availability={"S": day * 2})
+    return with_blocks(p, transport={"S": 24})
+
+
+def transport_t2_short_last_block_dataset() -> xr.Dataset:
+    """T2: 60 h and L = 24, so blocks of 24, 24 and 12 h."""
+    return with_blocks(_transport_t2([1.0] * 60, {"H": 1.5, "S": 3.0}), transport={"S": 24})
+
+
+def transport_t2_two_lengths_dataset() -> xr.Dataset:
+    """T2: ships of 12 h (``S``) and 24 h (``T``) and an hourly one (``H``): three groups on one link."""
+    p = _transport_t2([1.0] * 48, {"H": 1.0, "S": 1.5, "T": 2.0}, techs=("H", "S", "T"))
+    return with_blocks(p, transport={"S": 12, "T": 24})
+
+
+def transport_t2_mixed_group_costs_dataset() -> xr.Dataset:
+    """T2: an hourly (``H``) and a block (``S``) ship on each link: every (area, tech, year) cost cell is defined once."""
+    return with_blocks(_transport_t2([1.0] * 48, {"H": 1.5, "S": 3.0}), transport={"S": 24})
+
+
+def transport_t2_hurdle_dataset() -> xr.Dataset:
+    """T2: two operating years, a hurdle cost that differs per link and per year, on the block ship ``S``."""
+    p = _transport_t2([1.0] * 48, {"H": 1.5, "S": 3.0})
+    p = p.sel(year_op=[2030, 2030]).assign_coords(year_op=[2030, 2035])
+    hurdle = p["transport_hurdle_costs"].copy()
+    hurdle.loc[{"link": "ba", "transport_tech": "S", "year_op": 2030}] = 0.05
+    hurdle.loc[{"link": "ab", "transport_tech": "S", "year_op": 2030}] = 0.02
+    hurdle.loc[{"link": "ba", "transport_tech": "S", "year_op": 2035}] = 0.13
+    hurdle.loc[{"link": "ab", "transport_tech": "S", "year_op": 2035}] = 0.07
+    hurdle.loc[{"link": "ab", "transport_tech": "H", "year_op": 2035}] = 0.09
+    return with_blocks(p.assign(transport_hurdle_costs=hurdle), transport={"S": 24})
+
+
 def lp_text(m) -> str:
     """The LP file of ``m``, read back as text."""
     with tempfile.TemporaryDirectory() as d:
@@ -755,19 +821,20 @@ def to_hours(da: xr.DataArray, tb: TimeBlocks) -> xr.DataArray:
     )
 
 
-def flat_twin(p: xr.Dataset, conversion=None, combined=None):
+def flat_twin(p: xr.Dataset, conversion=None, combined=None, transport=None):
     """
     The flat twin (section 15.1): the hourly model of ``p`` without block
     inputs, plus ``power(h) = power(h-1)`` for every step that is not the
     first of its block, per technology (per unit and mode for combined) of
-    ``conversion`` / ``combined`` (``{tech: length}``). Not solved.
+    ``conversion`` / ``combined`` / ``transport`` (``{tech: length}``; a
+    transport tech: per existing pair). Not solved.
     """
     clean = p.drop_vars(BLOCK_PARAMETERS, errors="ignore")
     m = build_model(clean)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        tb = time_blocks(with_blocks(clean, conversion=conversion, combined=combined))
-    for module, lengths in (("conversion", conversion), ("combined", combined)):
+        tb = time_blocks(with_blocks(clean, conversion=conversion, combined=combined, transport=transport))
+    for module, lengths in (("conversion", conversion), ("combined", combined), ("transport", transport)):
         var = m.variables[f"operation_{module}_power"] if lengths else None
         for tech, L in (lengths or {}).items():
             dim = next(d for d in var.dims if d.endswith(("_tech", "_tech_unit")))
@@ -780,9 +847,8 @@ def flat_twin(p: xr.Dataset, conversion=None, combined=None):
                 dims="hour",
                 coords={"hour": tb.block_of_hour[L]["hour"].values},
             )
-            m.add_constraints(
-                v - v.shift(hour=1) == 0, mask=same, name=f"twin_{module}_{tech}"
-            )
+            mask = same & (v.labels >= 0) if module == "transport" else same
+            m.add_constraints(v - v.shift(hour=1) == 0, mask=mask, name=f"twin_{module}_{tech}")
     return m
 
 
