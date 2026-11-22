@@ -25,6 +25,7 @@ from pommes.utils import (
     block_dim,
     block_prefix,
     change_resolution,
+    check_group_coord,
     time_blocks,
 )
 
@@ -512,3 +513,24 @@ def test_block_modules_has_transport():
     assert "transport" in BLOCK_MODULES
     assert block_prefix("transport", 24) == "operation_transport_block_24h_"
     assert _BLOCK_NAME.match("operation_transport_block_24h_power")
+
+
+def test_check_group_coord_subset_and_set():
+    """Defaults are today's (same index, same order); ``subset`` tests inclusion, ``ordered=False`` the set."""
+    ref = pd.Index(["a", "b", "c"])
+
+    def obj(*labels):
+        return SimpleNamespace(indexes={"tech": pd.Index(list(labels))})
+
+    check_group_coord(obj("a", "b", "c"), ref, "tech")
+    for bad in (obj("c", "b", "a"), obj("a", "b"), obj("a", "b", "c", "d")):
+        with pytest.raises(RuntimeError):
+            check_group_coord(bad, ref, "tech")
+    check_group_coord(obj("c", "a"), ref, "tech", subset=True)
+    check_group_coord(obj("a", "b", "c"), ref, "tech", subset=True)
+    with pytest.raises(RuntimeError):
+        check_group_coord(obj("a", "z"), ref, "tech", subset=True)
+    check_group_coord(obj("c", "a", "b"), ref, "tech", ordered=False)
+    for bad in (obj("a", "b"), obj("a", "b", "c", "d"), obj("a", "b", "z")):
+        with pytest.raises(RuntimeError):
+            check_group_coord(bad, ref, "tech", ordered=False)

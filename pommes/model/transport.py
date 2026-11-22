@@ -1,6 +1,7 @@
 """Module related to inter-zone resource transport."""
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 from linopy import Constraint, Model
 from xarray import Dataset
@@ -9,7 +10,11 @@ from pommes.model.annuity import annuity_full_life, full_life_window
 from pommes.utils import (
     TimeBlocks,
     add_to_balances,
+    block_dim,
+    block_prefix,
     check_block_transport,
+    check_group_coord,
+    check_partition,
     condition_coords,
     condition_mask,
     expected_over_conditions,
@@ -17,6 +22,408 @@ from pommes.utils import (
     transport_pair_exists,
 )
 
+
+def transport_groups(
+    p: Dataset, tb: TimeBlocks
+) -> list[tuple[int | None, Dataset, None]]:
+    """
+    The groups ``(L, p_g, None)`` of the transport module.
+
+    ``L`` is None for the hourly technologies, else a block length
+    (ascending); a group without technology is left out. ``p_g`` is
+    ``p.sel(transport_tech=techs_g)``; a block group holds no
+    ``transport_availability`` (the only transport parameter with an ``hour``
+    dimension). Without a block length on a transport technology (conversion
+    blocks included) there is one group, ``(None, p, None)``, ``p`` itself.
+    Transport has no unit index: the third element is always None.
+    """
+    lengths = tb.tech_length["transport"].values
+    if not (tb.active and np.isfinite(lengths).any()):
+        return [(None, p, None)]
+    keys = [None, *sorted({int(x) for x in lengths[np.isfinite(lengths)]})]
+    parts = check_partition(
+        {L: pd.Index(tb.techs("transport", L)) for L in keys},
+        p.indexes["transport_tech"],
+    )
+    out = []
+    for L, part in parts.items():
+        if L is None:
+            p_g = p.sel(transport_tech=list(part))
+        else:
+            p_g = p.drop_vars("transport_availability", errors="ignore").sel(
+                transport_tech=list(part)
+            )
+        out.append((L, p_g, None))
+    return out
+
+
+def _refuse_unbuilt_rows(p_g: Dataset) -> None:
+    """
+    Interim guard: refuse an input whose rows the block groups do not build yet.
+
+    A finite ramp (clause removed by Task 4), a finite fuel consumption (Task
+    5) and a non-zero fuel emission factor with a finite fuel consumption
+    (Task 6, which removes the function).
+    """
+
+    def finite(name):
+        return name in p_g and bool(np.isfinite(p_g[name]).any())
+
+    for name in ("transport_ramp_up", "transport_ramp_down"):
+        if finite(name):
+            raise NotImplementedError(
+                f"{name}: ramps on a block transport technology are not built yet."
+            )
+    fuel = finite("transport_fuel_consumption")
+    for name in (
+        "transport_fuel_emission_factor",
+        "transport_fuel_total_emission_factor",
+    ):
+        if fuel and name in p_g and bool((p_g[name].fillna(0) != 0).any()):
+            raise NotImplementedError(
+                f"{name}: fuel emissions of a block transport technology are not built yet."
+            )
+    if fuel:
+        raise NotImplementedError(
+            "transport_fuel_consumption: fuel on a block transport technology is not built yet."
+        )
+
+
+def _group_variables(
+    m: Model, p: Dataset, tb: TimeBlocks, L: int | None, pair
+):
+    """
+    Power, injected power, linepack level and net generation of a group.
+
+    On the group's own technologies and time axis (``hour`` for the hourly
+    group, ``time_block_{L}h`` for a block group); ``pair`` is the pair mask
+    restricted to the group. The linepack level exists for the hourly group
+    only (None for a block group, R12).
+    """
+    prefix = block_prefix("transport", L)
+    time = p.hour if L is None else tb.duration[L][block_dim(L)]
+    power = m.add_variables(
+        name=f"{prefix}power",
+        lower=0,
+        coords=[
+            p.link,
+            p.transport_tech,
+            time,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(p, pair),
+    )
+
+    # Power injected into the link at its transport_area_from end. Equal to
+    # operation_transport_power (the flow withdrawn at transport_area_to)
+    # unless transport_linepack_capacity is configured, in which case the
+    # pipe's own gas/volume buffer can absorb the difference -- see
+    # operation_transport_power_in_def and operation_transport_linepack_level_def.
+    power_in = m.add_variables(
+        name=f"{prefix}power_in",
+        lower=0,
+        coords=[
+            p.link,
+            p.transport_tech,
+            time,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(p, pair),
+    )
+
+    # Linepack buffer level (only meaningful where transport_linepack_capacity
+    # is configured; see operation_transport_linepack_level_def).
+    level = None
+    if L is None:
+        level = m.add_variables(
+            name=f"{prefix}linepack_level",
+            lower=0,
+            coords=[
+                p.link,
+                p.transport_tech,
+                time,
+                p.year_op,
+                *condition_coords(p),
+            ],
+            mask=condition_mask(
+                p, np.isfinite(p.transport_linepack_capacity) & pair
+            ),
+        )
+
+    # Operation - transport intermediate variables
+
+    net_generation = m.add_variables(
+        name=f"{prefix}net_generation",
+        coords=[
+            p.area,
+            time,
+            p.transport_tech,
+            p.resource,
+            p.year_op,
+            *condition_coords(p),
+        ],
+        mask=condition_mask(
+            p,
+            np.equal(p.transport_resource, p.resource).any(
+                [dim for dim in ["link"] if dim in p.transport_resource.dims]
+            ),
+        ),
+    )
+    return power, power_in, level, net_generation
+
+
+class _TransportRows:
+    """
+    The operational rows of one transport group.
+
+    ``L`` is None for the hourly group, whose rows are today's; else the rows
+    are the hourly rows on the block axis ``T = time_block_{L}h``: the step
+    ``D`` is the block duration, the ramp divisor ``D0`` the duration of its
+    first step and ``first`` replaces ``hour != hour[0]``. ``capacity`` and
+    ``costs`` are the year-level variables restricted to the group, ``pair``
+    and ``delay_steps`` restricted too, and ``p_g`` supplies every parameter
+    (H7). After each row of a split module the group's coordinate is checked
+    (H1/H2). ``variables`` is the tuple of ``_group_variables``.
+    """
+
+    def __init__(
+        self,
+        m,
+        p_g,
+        tb,
+        L,
+        variables,
+        capacity,
+        costs,
+        norm,
+        pair,
+        delay_steps=None,
+    ):
+        self.m, self.p, self.tb, self.L = m, p_g, tb, L
+        self.power, self.power_in, self.level, self.net_generation = variables
+        self.capacity, self.costs, self.norm = capacity, costs, norm
+        self.pair, self.delay_steps = pair, delay_steps
+        self.prefix = block_prefix("transport", L)
+        if L is None:
+            self.T = "hour"
+            self.D = self.D0 = p_g.time_step_duration
+            self.first = p_g.hour != p_g.hour[0]
+        else:
+            self.T = block_dim(L)
+            self.D, self.D0 = tb.duration[L], tb.first_step_duration[L]
+            self.first = tb.duration[L][self.T] != 0
+        # the module is split: some transport tech has a block length
+        self.guard = tb.active and bool(
+            np.isfinite(tb.tech_length["transport"].values).any()
+        )
+        self.dim, self.ref = "transport_tech", p_g.indexes["transport_tech"]
+
+    def add(self, constraint, name, mask=None):
+        """Add the row ``prefix + name``; check its coordinate in a split module."""
+        con = self.m.add_constraints(
+            constraint, name=f"{self.prefix}{name}", mask=mask
+        )
+        if self.guard:
+            check_group_coord(con, self.ref, self.dim)
+        return con
+
+    def fuel(self, adequacy):
+        """Fuel burnt by the link (e.g. ship bunker fuel), drawn from the balances."""
+        if self.L is not None:
+            return
+        p = self.p
+        # in proportion to the injected flow, drawn at transport_fuel_area: the
+        # "from" end by default (no value, or one that is not an area), or any
+        # area, e.g. a global bunker market that the regions supply through
+        # their own links.
+        if np.isfinite(p.transport_fuel_consumption).any():  # skip the term when no link burns fuel
+            fuel_area = xr.where(
+                p.transport_fuel_area.isin(p.area.values),
+                p.transport_fuel_area,
+                p.transport_area_from,
+            )
+            fuel_drawn = (
+                (
+                    self.power_in
+                    * p.transport_fuel_consumption.fillna(0)
+                    * self.D
+                )
+                .where(p.area == fuel_area)
+                .where(p.resource == p.transport_fuel_resource)
+                .sum(["link", "transport_tech"])
+            )
+            add_to_balances(adequacy, -fuel_drawn, self.tb)
+
+    def limits(self):
+        """Power bounds, delays, linepack and ramps (the hourly group only for now)."""
+        if self.L is not None:
+            return
+        p, power, power_in = self.p, self.power, self.power_in
+        level, capacity, pair = self.level, self.capacity, self.pair
+        T, first = self.T, self.first
+
+        self.add(
+            power
+            - capacity
+            * xr.where(
+                cond=np.isfinite(p.transport_availability),
+                x=p.transport_availability,
+                y=1,
+            )
+            <= 0,
+            "power_max_constraint",
+            mask=condition_mask(p, pair),
+        )
+
+        # Operation - transport linepack
+
+        # Where linepack isn't configured, the flow withdrawn at the "to" end is
+        # the injected flow times the link efficiency (default 1: a lossless
+        # link).
+        no_linepack = ~np.isfinite(p.transport_linepack_capacity)
+        self.add(
+            power_in * p.transport_efficiency - power == 0,
+            "power_in_def",
+            mask=condition_mask(
+                p, no_linepack & (self.delay_steps == 0) & pair
+            ),
+        )
+
+        # With a delay of k time steps, what is withdrawn at hour h was injected
+        # at hour h - k (cyclic over the year): one constraint set per delay value.
+        delay_steps = self.delay_steps
+        for k in np.unique(delay_steps.values[delay_steps.values > 0]):
+            self.add(
+                power_in.roll(hour=int(k)) * p.transport_efficiency - power
+                == 0,
+                f"power_in_def_delay_{int(k)}",
+                mask=condition_mask(p, no_linepack & (delay_steps == k) & pair),
+            )
+
+        # Where configured, the pipe's own gas/volume buffer absorbs the
+        # difference between what's injected (power_in) and what's withdrawn
+        # (operation_transport_power) -- cyclic over the year, like storage's
+        # own level definition.
+        self.add(
+            -level
+            + level.roll(hour=1)
+            + (power_in - power) * self.D
+            == 0,
+            "linepack_level_def",
+            mask=condition_mask(
+                p, np.isfinite(p.transport_linepack_capacity) & pair
+            ),
+        )
+
+        self.add(
+            level <= p.transport_linepack_capacity,
+            "linepack_level_max_constraint",
+            mask=condition_mask(
+                p, np.isfinite(p.transport_linepack_capacity) & pair
+            ),
+        )
+
+        self.add(
+            power_in
+            - capacity
+            * xr.where(
+                cond=np.isfinite(p.transport_availability),
+                x=p.transport_availability,
+                y=1,
+            )
+            <= 0,
+            "power_in_max_constraint",
+            mask=condition_mask(
+                p, np.isfinite(p.transport_linepack_capacity) & pair
+            ),
+        )
+
+        # Operation - Transport unit commitment
+
+        self.add(
+            -p.transport_ramp_up * capacity
+            + (power - power.shift({T: 1})) / self.D0
+            <= 0,
+            "ramp_up_constraint",
+            mask=condition_mask(
+                p, np.isfinite(p.transport_ramp_up) * first * pair
+            ),
+        )
+
+        self.add(
+            -p.transport_ramp_down * capacity
+            + (power.shift({T: 1}) - power) / self.D0
+            <= 0,
+            "ramp_down_constraint",
+            mask=condition_mask(
+                p, np.isfinite(p.transport_ramp_down) * first * pair
+            ),
+        )
+
+    def net_generation_def(self):
+        """Net generation (energy per step or per block) from the flows at the two ends."""
+        p = self.p
+        self.add(
+            -self.net_generation
+            + self.D
+            * (
+                self.power.where(p.area == p.transport_area_to).sum("link")
+                # Uses power_in (what's actually injected at the "from" end)
+                # rather than operation_transport_power (what's withdrawn at
+                # "to") -- identical to it unless linepack is configured, in
+                # which case the two legitimately differ while the buffer
+                # charges/discharges.
+                - self.power_in.where(p.area == p.transport_area_from).sum(
+                    "link"
+                )
+            ).where(
+                np.equal(p.transport_resource, p.resource).any(
+                    [
+                        dim
+                        for dim in ["link", "year_inv"]
+                        if dim in p.transport_resource.dims
+                    ]
+                )
+            )
+            == 0,
+            "net_generation_def",
+            mask=condition_mask(
+                p,
+                np.equal(p.transport_resource, p.resource).any(
+                    [dim for dim in ["link"] if dim in p.transport_resource.dims]
+                ),
+            ),
+        )
+
+    def costs_def(self):
+        """Operational costs: fixed cost on the capacity, hurdle cost on the energy."""
+        p = self.p
+        self.add(
+            -self.costs
+            # Fixed costs and hurdle costs, split half and half between the two
+            # ends of each link
+            + 0.5
+            * (
+                (
+                    p.transport_fixed_cost * self.capacity
+                    + p.transport_hurdle_costs.fillna(0)
+                    * self.norm
+                    * (self.D * self.power).sum(self.T)
+                )
+                .where(
+                    np.logical_or(
+                        p.area == p.transport_area_from,
+                        p.area == p.transport_area_to,
+                    )
+                )
+                .sum("link")
+            )
+            == 0,
+            "costs_def",
+            mask=condition_mask(p),
+        )
 
 def add_transport(
     model: Model,
@@ -181,11 +588,6 @@ def add_transport(
     p = model_parameters
     # R11, R12 on the full dataset, before the uniform-step error below
     check_block_transport(p, tb)
-    # Interim guard, removed by the task that builds the block rows
-    if tb.tech_length["transport"].notnull().any():
-        raise NotImplementedError(
-            "block transport technologies are not built yet"
-        )
 
     # The delay between injection and delivery is given in hours (default 0);
     # the flow is rolled by whole time steps, so it is converted to steps,
@@ -203,6 +605,38 @@ def add_transport(
     # the flows, capacities and rows of the module is created there.
     pair_exists = transport_pair_exists(p)
 
+    # Today's statements on p itself unless some transport tech has a block
+    # length: then the hourly techs and each block length form a group.
+    groups = transport_groups(p, tb)
+    blocked = groups[0][1] is not p
+    hourly = [g for g in groups if g[0] is None]
+    blocks = [g for g in groups if g[0] is not None]
+
+    operation_year_normalization = (
+        p.operation_year_duration / p.time_step_duration.sum("hour")
+    )
+
+    def restrict(x, p_g):
+        """``x`` on the technologies of the group (H1), only when the module is split."""
+        if blocked and "transport_tech" in x.dims:
+            return x.sel(transport_tech=p_g.indexes["transport_tech"])
+        return x
+
+    def rows_of(L, p_g, variables):
+        """The row object of a group, its partners restricted to its technologies (H1)."""
+        return _TransportRows(
+            m,
+            p_g,
+            tb,
+            L,
+            variables,
+            restrict(operation_transport_power_capacity, p_g),
+            restrict(operation_transport_costs, p_g),
+            operation_year_normalization,
+            restrict(pair_exists, p_g),
+            restrict(delay_steps, p_g),
+        )
+
     # ------------
     # Variables
     # ------------
@@ -216,73 +650,13 @@ def add_transport(
         mask=pair_exists,
     )
 
-    operation_transport_power = m.add_variables(
-        name="operation_transport_power",
-        lower=0,
-        coords=[
-            p.link,
-            p.transport_tech,
-            p.hour,
-            p.year_op,
-            *condition_coords(p),
-        ],
-        mask=condition_mask(p, pair_exists),
-    )
-
-    # Power injected into the link at its transport_area_from end. Equal to
-    # operation_transport_power (the flow withdrawn at transport_area_to)
-    # unless transport_linepack_capacity is configured, in which case the
-    # pipe's own gas/volume buffer can absorb the difference -- see
-    # operation_transport_power_in_def and operation_transport_linepack_level_def.
-    operation_transport_power_in = m.add_variables(
-        name="operation_transport_power_in",
-        lower=0,
-        coords=[
-            p.link,
-            p.transport_tech,
-            p.hour,
-            p.year_op,
-            *condition_coords(p),
-        ],
-        mask=condition_mask(p, pair_exists),
-    )
-
-    # Linepack buffer level (only meaningful where transport_linepack_capacity
-    # is configured; see operation_transport_linepack_level_def).
-    operation_transport_linepack_level = m.add_variables(
-        name="operation_transport_linepack_level",
-        lower=0,
-        coords=[
-            p.link,
-            p.transport_tech,
-            p.hour,
-            p.year_op,
-            *condition_coords(p),
-        ],
-        mask=condition_mask(
-            p, np.isfinite(p.transport_linepack_capacity) & pair_exists
-        ),
-    )
-
-    # Operation - transport intermediate variables
-
-    operation_transport_net_generation = m.add_variables(
-        name="operation_transport_net_generation",
-        coords=[
-            p.area,
-            p.hour,
-            p.transport_tech,
-            p.resource,
-            p.year_op,
-            *condition_coords(p),
-        ],
-        mask=condition_mask(
-            p,
-            np.equal(p.transport_resource, p.resource).any(
-                [dim for dim in ["link"] if dim in p.transport_resource.dims]
-            ),
-        ),
-    )
+    # The hourly group's flows, power injected, linepack level and net
+    # generation, in today's order
+    if hourly:
+        _, p_h, _ = hourly[0]
+        hourly_variables = _group_variables(
+            m, p_h, tb, None, restrict(pair_exists, p_h)
+        )
 
     # Planning - transport
 
@@ -319,6 +693,9 @@ def add_transport(
         coords=[p.area, p.transport_tech, p.year_op],
     )
 
+    if hourly:
+        hourly_rows = rows_of(None, p_h, hourly_variables)
+
     # ------------------
     # Objective function
     # ------------------
@@ -336,154 +713,18 @@ def add_transport(
 
     # Adequacy constraint
 
-    add_to_balances(
-        operation_adequacy_constraint,
-        operation_transport_net_generation.sum("transport_tech"),
-        tb,
-    )
-
-    # Fuel burnt by the link (e.g. ship bunker fuel), in proportion to the
-    # injected flow, drawn at transport_fuel_area: the "from" end by default
-    # (no value, or one that is not an area), or any area, e.g. a global bunker
-    # market that the regions supply through their own links.
-    if np.isfinite(p.transport_fuel_consumption).any():       # skip the term when no link burns fuel
-        fuel_area = xr.where(
-            p.transport_fuel_area.isin(p.area.values),
-            p.transport_fuel_area,
-            p.transport_area_from,
-        )
-        fuel_drawn = (
-            (
-                operation_transport_power_in
-                * p.transport_fuel_consumption.fillna(0)
-                * p.time_step_duration
-            )
-            .where(p.area == fuel_area)
-            .where(p.resource == p.transport_fuel_resource)
-            .sum(["link", "transport_tech"])
-        )
-        add_to_balances(operation_adequacy_constraint, -fuel_drawn, tb)
-
-    # Operation - transport
-
-    # m.add_constraints(
-    #     operation_transport_power - operation_transport_power_capacity <= 0,
-    #     name="operation_transport_power_max_constraint",
-    # )
-
-
-    m.add_constraints(
-        operation_transport_power
-        - operation_transport_power_capacity
-        * xr.where(
-            cond=np.isfinite(p.transport_availability),
-            x=p.transport_availability,
-            y=1,
-        )
-        <= 0,
-        name="operation_transport_power_max_constraint",
-        mask=condition_mask(p, pair_exists),
-    )
-
-    # Operation - transport linepack
-
-    # Where linepack isn't configured, the flow withdrawn at the "to" end is
-    # the injected flow times the link efficiency (default 1: a lossless
-    # link).
-    no_linepack = ~np.isfinite(p.transport_linepack_capacity)
-    m.add_constraints(
-        operation_transport_power_in * p.transport_efficiency
-        - operation_transport_power
-        == 0,
-        name="operation_transport_power_in_def",
-        mask=condition_mask(p, no_linepack & (delay_steps == 0) & pair_exists),
-    )
-
-    # With a delay of k time steps, what is withdrawn at hour h was injected
-    # at hour h - k (cyclic over the year): one constraint set per delay value.
-    for k in np.unique(delay_steps.values[delay_steps.values > 0]):
-        m.add_constraints(
-            operation_transport_power_in.roll(hour=int(k)) * p.transport_efficiency
-            - operation_transport_power
-            == 0,
-            name=f"operation_transport_power_in_def_delay_{int(k)}",
-            mask=condition_mask(p, no_linepack & (delay_steps == k) & pair_exists),
+    if hourly:
+        add_to_balances(
+            operation_adequacy_constraint,
+            hourly_variables[3].sum("transport_tech"),
+            tb,
         )
 
-    # Where configured, the pipe's own gas/volume buffer absorbs the
-    # difference between what's injected (power_in) and what's withdrawn
-    # (operation_transport_power) -- cyclic over the year, like storage's
-    # own level definition.
-    m.add_constraints(
-        -operation_transport_linepack_level
-        + operation_transport_linepack_level.roll(hour=1)
-        + (operation_transport_power_in - operation_transport_power)
-        * p.time_step_duration
-        == 0,
-        name="operation_transport_linepack_level_def",
-        mask=condition_mask(
-            p, np.isfinite(p.transport_linepack_capacity) & pair_exists
-        ),
-    )
+        # Fuel burnt by the link
+        hourly_rows.fuel(operation_adequacy_constraint)
 
-    m.add_constraints(
-        operation_transport_linepack_level <= p.transport_linepack_capacity,
-        name="operation_transport_linepack_level_max_constraint",
-        mask=condition_mask(
-            p, np.isfinite(p.transport_linepack_capacity) & pair_exists
-        ),
-    )
-
-    m.add_constraints(
-        operation_transport_power_in
-        - operation_transport_power_capacity
-        * xr.where(
-            cond=np.isfinite(p.transport_availability),
-            x=p.transport_availability,
-            y=1,
-        )
-        <= 0,
-        name="operation_transport_power_in_max_constraint",
-        mask=condition_mask(
-            p, np.isfinite(p.transport_linepack_capacity) & pair_exists
-        ),
-    )
-
-    # Operation - Transport unit commitment
-
-    m.add_constraints(
-        -p.transport_ramp_up * operation_transport_power_capacity
-        + (
-                operation_transport_power
-                - operation_transport_power.shift(hour=1)
-        )
-        / p.time_step_duration
-        <= 0,
-        name="operation_transport_ramp_up_constraint",
-        mask=condition_mask(
-            p,
-            np.isfinite(p.transport_ramp_up)
-            * (p.hour != p.hour[0])
-            * pair_exists,
-        ),
-    )
-
-    m.add_constraints(
-        -p.transport_ramp_down * operation_transport_power_capacity
-        + (
-                operation_transport_power.shift(hour=1)
-                - operation_transport_power
-        )
-        / p.time_step_duration
-        <= 0,
-        name="operation_transport_ramp_down_constraint",
-        mask=condition_mask(
-            p,
-            np.isfinite(p.transport_ramp_down)
-            * (p.hour != p.hour[0])
-            * pair_exists,
-        ),
-    )
+        # Operation - transport (power bounds, delays, linepack, ramps)
+        hourly_rows.limits()
 
     # Operation - transport intermediate variables
 
@@ -497,39 +738,8 @@ def add_transport(
         mask=pair_exists,
     )
 
-    m.add_constraints(
-        -operation_transport_net_generation
-        + p.time_step_duration
-        * (
-            operation_transport_power.where(p.area == p.transport_area_to).sum(
-                "link"
-            )
-            # Uses power_in (what's actually injected at the "from" end)
-            # rather than operation_transport_power (what's withdrawn at
-            # "to") -- identical to it unless linepack is configured, in
-            # which case the two legitimately differ while the buffer
-            # charges/discharges.
-            - operation_transport_power_in.where(
-                p.area == p.transport_area_from
-            ).sum("link")
-        ).where(
-            np.equal(p.transport_resource, p.resource).any(
-                [
-                    dim
-                    for dim in ["link", "year_inv"]
-                    if dim in p.transport_resource.dims
-                ]
-            )
-        )
-        == 0,
-        name="operation_transport_net_generation_def",
-        mask=condition_mask(
-            p,
-            np.equal(p.transport_resource, p.resource).any(
-                [dim for dim in ["link"] if dim in p.transport_resource.dims]
-            ),
-        ),
-    )
+    if hourly:
+        hourly_rows.net_generation_def()
 
     # Operation - other constraints
     m.add_constraints(
@@ -584,34 +794,8 @@ def add_transport(
 
     # Costs - transport
 
-    operation_year_normalization = (
-        p.operation_year_duration / p.time_step_duration.sum("hour")
-    )
-
-    m.add_constraints(
-        -operation_transport_costs
-        # Fixed costs and hurdle costs, split half and half between the two
-        # ends of each link
-        + 0.5
-        * (
-            (
-                p.transport_fixed_cost * operation_transport_power_capacity
-                + p.transport_hurdle_costs.fillna(0)
-                * operation_year_normalization
-                * (p.time_step_duration * operation_transport_power).sum("hour")
-            )
-            .where(
-                np.logical_or(
-                    p.area == p.transport_area_from,
-                    p.area == p.transport_area_to,
-                )
-            )
-            .sum("link")
-        )
-        == 0,
-        name="operation_transport_costs_def",
-        mask=condition_mask(p),
-    )
+    if hourly:
+        hourly_rows.costs_def()
 
     if annuity_full_life(p, "transport_annuity_cost"):
         # Annuity fixed at investment, paid over the vintage's full life
@@ -681,5 +865,23 @@ def add_transport(
         -planning_transport_costs + annuity_terms == 0,
         name="planning_transport_costs_def",
     )
+
+    # Block groups, after the module's last statement: their labels follow
+    # every hourly label, and each row is the hourly row on the block axis.
+
+    for L, p_g, _ in blocks:
+        _refuse_unbuilt_rows(p_g)
+        variables = _group_variables(m, p_g, tb, L, restrict(pair_exists, p_g))
+        add_to_balances(
+            operation_adequacy_constraint,
+            variables[3].sum("transport_tech"),
+            tb,
+            src=L,
+        )
+        rows = rows_of(L, p_g, variables)
+        rows.fuel(operation_adequacy_constraint)
+        rows.limits()
+        rows.net_generation_def()
+        rows.costs_def()
 
     return m

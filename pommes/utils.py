@@ -1327,18 +1327,29 @@ def check_block_dims(m) -> None:
                     )
 
 
-def check_group_coord(obj, ref: pd.Index, dim: str) -> None:
+def check_group_coord(
+    obj, ref: pd.Index, dim: str, subset: bool = False, ordered: bool = True
+) -> None:
     """
     H1/H2 guard: ``obj`` (a variable or a constraint) carries the group's own
     coordinate along ``dim``, order included.
 
     Raises ``RuntimeError`` otherwise: a partner restricted in another order
     or a forgotten restriction would be paired by position, or grow the group.
+    ``subset=True`` tests inclusion in ``ref`` (any order); ``ordered=False``
+    tests the same set of labels (any order). Both default to today's test.
     """
-    if not obj.indexes[dim].equals(ref):
+    got = obj.indexes[dim]
+    if subset:
+        ok = bool(got.isin(ref).all())
+    elif ordered:
+        ok = got.equals(ref)
+    else:
+        ok = len(got) == len(ref) and bool(got.isin(ref).all()) and bool(ref.isin(got).all())
+    if not ok:
         raise RuntimeError(
             f"{getattr(obj, 'name', obj)}: {dim} is not the group's "
-            f"coordinate (H1/H2): {list(obj.indexes[dim])} != {list(ref)}."
+            f"coordinate (H1/H2): {list(got)} != {list(ref)}."
         )
 
 

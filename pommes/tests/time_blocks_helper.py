@@ -77,7 +77,8 @@ def transport_every_row_dataset() -> xr.Dataset:
     T0(b): every row of the transport module on three 1 h steps, no block length.
 
     Ramps up and down, an availability that varies with the hour, capacity bounds, investment bounds, delays of 1 h
-    and 2 h on two pairs, a linepack on two other pairs, and pairs with none of these (the power line).
+    and 2 h on two pairs, a linepack on two other pairs. The power line has no delay, no linepack, no availability
+    and no investment bound: it carries a ramp up on link_1 and a capacity maximum on link_2 only.
     """
     p = xr.merge([_fixture("parameters_dispatch_invest"), _fixture("transport")])
     p["transport_hurdle_costs"] = p.transport_hurdle_costs / 8760
@@ -118,6 +119,140 @@ def transport_every_row_dataset() -> xr.Dataset:
     p["transport_linepack_capacity"][0, 0, :] = 5.0
     p["transport_linepack_capacity"][1, 1, :] = 12.0
     return p
+
+
+def transport_toy(dt: list[float], rate: list[float] | None = None, **kw) -> xr.Dataset:
+    """
+    Hourly transport toy (two areas, two links, one year, no carbon, no flexdem).
+
+    Areas ``a`` and ``b``, links ``ab`` and ``ba``, resources ``idle``, ``cargo`` and ``oil``. Conversion, both
+    hourly: ``mill`` makes cargo at ``a`` only (its capacity at ``b`` is 0) and ``bunker`` makes oil. Ships carry
+    cargo; by default an hourly ``H`` first and ``S`` second, the tech of index i with the link ends of index 0
+    swapped when i is odd (``S`` runs ``b`` to ``a`` on ``ab`` and ``a`` to ``b`` on ``ba``), so that a position
+    read on the full tech axis picks the wrong links. No length is set: ``with_blocks(p, transport={"S": 24})``.
+    The cargo demand at ``b`` is ``rate`` (MW, cycled) times the step. Fixed costs and hurdle costs are finite,
+    distinct and positive per (link, tech), and every spillage is priced, so that the optimum is unique.
+
+    Keywords (a dict maps a tech to its value): ``techs`` (names), ``eff`` (efficiency), ``ramp`` ((up, down)),
+    ``availability`` (list per hour), ``fuel`` (fuel consumption: the tech burns ``oil``), ``fuel_area`` (area the fuel
+    is drawn at), ``delay`` (hours), ``linepack`` (capacity); ``silo`` (bool): an hourly storage ``silo`` on cargo.
+    """
+    from pommes.model.data_validation import ref_inputs
+
+    dt = np.array(dt, dtype="float64")
+    n = len(dt)
+    rate = np.resize(np.array(HEAT_RATE if rate is None else rate), n)
+    techs = list(kw.pop("techs", ["H", "S"]))
+    eff, ramp, availability = kw.pop("eff", {}), kw.pop("ramp", {}), kw.pop("availability", {})
+    fuel, fuel_area, delay = kw.pop("fuel", {}), kw.pop("fuel_area", {}), kw.pop("delay", {})
+    linepack, silo = kw.pop("linepack", {}), kw.pop("silo", False)
+    assert not kw, kw
+    k = len(techs)
+    ds = xr.Dataset(
+        coords=dict(
+            area=["a", "b"],
+            hour=np.arange(n, dtype="int64"),
+            resource=["idle", "cargo", "oil"],
+            conversion_tech=["mill", "bunker"],
+            transport_tech=techs,
+            link=["ab", "ba"],
+            year_dec=np.array([2040]),
+            year_inv=np.array([2020]),
+            year_op=np.array([2030], dtype="int64"),
+        )
+    )
+    ds["conversion"] = True
+    ds["transport"] = True
+    ds["time_step_duration"] = ("hour", dt)
+    ds["operation_year_duration"] = ("year_op", [8760.0])
+    ds["operation_day_duration"] = np.array(24, dtype="int64")
+    ds["discount_rate"] = ("year_op", [0.0])
+    ds["discount_factor"] = ("year_op", [1.0])
+    demand = np.zeros((2, n, 3, 1))
+    demand[1, :, 1, 0] = rate * dt
+    ds["demand"] = (("area", "hour", "resource", "year_op"), demand)
+    ds["load_shedding_max_capacity"] = ("resource", [0.0, 0.0, 0.0])
+    ds["load_shedding_cost"] = ("resource", [0.0, 0.0, 0.0])
+    ds["spillage_max_capacity"] = ("resource", [np.nan, np.nan, np.nan])
+    ds["spillage_cost"] = ("resource", [1.0, 2.0, 3.0])
+    ds["conversion_factor"] = (("conversion_tech", "resource"), [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    ds["conversion_variable_cost"] = ("conversion_tech", [0.5, 0.9])
+    ds["conversion_fixed_cost"] = ("conversion_tech", [0.7, 1.1])
+    ds["conversion_invest_cost"] = ("conversion_tech", [0.0, 0.0])
+    ds["conversion_emission_factor"] = ("conversion_tech", [0.0, 0.0])
+    ds["conversion_power_capacity_max"] = (("area", "conversion_tech"), [[np.nan, np.nan], [0.0, np.nan]])
+    ds["conversion_power_capacity_min"] = (("area", "conversion_tech"), np.zeros((2, 2)))
+    ds["conversion_life_span"] = ("conversion_tech", [20.0, 20.0])
+    ds["conversion_end_of_life"] = (("conversion_tech", "year_inv"), [[2040.0], [2040.0]])
+    ds["conversion_annuity_cost"] = (("conversion_tech", "year_dec", "year_inv"), np.zeros((2, 1, 1)))
+    ds["conversion_early_decommissioning"] = np.array(False)
+    ds["annuity_full_life"] = np.array(False)
+    # transport: tech i, link j
+    lt = lambda f: np.array([[f(i, j) for i in range(k)] for j in range(2)], dtype="float64")  # noqa: E731
+    ends = np.array([[["a", "b"] if (i % 2 == 0) == (j == 0) else ["b", "a"] for i in range(k)] for j in range(2)])
+    ds["transport_area_from"] = (("link", "transport_tech"), ends[:, :, 0])
+    ds["transport_area_to"] = (("link", "transport_tech"), ends[:, :, 1])
+    ds["transport_resource"] = (("link", "transport_tech"), np.full((2, k), "cargo"))
+    ds["transport_fixed_cost"] = (("link", "transport_tech", "year_op"), lt(lambda i, j: 0.31 + 0.06 * i + 0.02 * j)[..., None])
+    ds["transport_hurdle_costs"] = (("link", "transport_tech", "year_op"), lt(lambda i, j: 0.011 + 0.005 * i + 0.002 * j)[..., None])
+    ds["transport_life_span"] = (("link", "transport_tech", "year_inv"), np.full((2, k, 1), 20.0))
+    ds["transport_end_of_life"] = (("link", "transport_tech", "year_inv"), np.full((2, k, 1), 2040))
+    ds["transport_annuity_cost"] = (("link", "transport_tech", "year_dec", "year_inv"), np.zeros((2, k, 1, 1)))
+    ds["transport_early_decommissioning"] = np.array(False)
+
+    def per_tech_grid(values, fill, *dims):
+        da = xr.DataArray(
+            np.full([ds.sizes[d] for d in dims], fill, dtype="float64"), dims=dims, coords={d: ds[d].values for d in dims}
+        )
+        for tech, v in values.items():
+            da.loc[{"transport_tech": tech}] = v
+        return da
+
+    if eff:
+        ds["transport_efficiency"] = per_tech_grid(eff, 1.0, "link", "transport_tech", "year_op")
+    if ramp:
+        ds["transport_ramp_up"] = per_tech_grid({t: v[0] for t, v in ramp.items()}, np.nan, "link", "transport_tech", "year_op")
+        ds["transport_ramp_down"] = per_tech_grid({t: v[1] for t, v in ramp.items()}, np.nan, "link", "transport_tech", "year_op")
+    if availability:
+        ds["transport_availability"] = per_tech_grid(
+            {t: np.asarray(v)[None, :, None] for t, v in availability.items()}, np.nan, "link", "transport_tech", "hour", "year_op"
+        )
+    if fuel:
+        ds["transport_fuel_consumption"] = per_tech_grid(fuel, np.nan, "link", "transport_tech", "year_op")
+        ds["transport_fuel_resource"] = (
+            ("link", "transport_tech"),
+            np.where(np.isin(techs, list(fuel))[None, :], "oil", "nan").repeat(2, axis=0),
+        )
+    if fuel_area:
+        ds["transport_fuel_area"] = (
+            ("link", "transport_tech"),
+            np.array([[fuel_area.get(t, "nan") for t in techs]] * 2),
+        )
+    if delay:
+        ds["transport_delay"] = per_tech_grid(delay, 0.0, "link", "transport_tech")
+    if linepack:
+        ds["transport_linepack_capacity"] = per_tech_grid(linepack, np.nan, "link", "transport_tech", "year_op")
+    if silo:
+        ds["storage"] = np.array(True)
+        ds = ds.assign_coords(storage_tech=["silo"])
+        ds["storage_main_resource"] = ("storage_tech", ["cargo"])
+        ds["storage_factor_in"] = (("storage_tech", "resource"), [[0.0, -1.0, 0.0]])
+        ds["storage_factor_out"] = (("storage_tech", "resource"), [[0.0, 1.0, 0.0]])
+        ds["storage_factor_keep"] = (("storage_tech", "resource"), [[0.0, 0.0, 0.0]])
+        ds["storage_dissipation"] = ("storage_tech", [0.0])
+        ds["storage_life_span"] = ("storage_tech", [20.0])
+        ds["storage_end_of_life"] = (("storage_tech", "year_inv"), [[2040.0]])
+        ds["storage_early_decommissioning"] = np.array(False)
+        for name in ("storage_annuity_cost_energy", "storage_annuity_cost_power"):
+            ds[name] = (("storage_tech", "year_dec", "year_inv"), np.zeros((1, 1, 1)))
+        for name, v in (("fixed_cost_energy", 0.2), ("fixed_cost_power", 0.3)):
+            ds[f"storage_{name}"] = ("storage_tech", [v])
+        for name in ("invest_cost_energy", "invest_cost_power"):
+            ds[f"storage_{name}"] = ("storage_tech", [0.0])
+    for name, spec in ref_inputs.items():
+        if name not in ds.variables:
+            ds[name] = np.array(spec["default"], dtype=spec["type"])
+    return ds
 
 
 def lp_text(m) -> str:

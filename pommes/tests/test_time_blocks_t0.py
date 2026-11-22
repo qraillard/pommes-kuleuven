@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from pommes.model import transport
 from pommes.model.build_model import build_model
 from pommes.utils import time_blocks
 from pommes.tests.dataset_nnodes import build_nnode_parameters
@@ -19,6 +20,7 @@ from pommes.tests.time_blocks_helper import (
     lp_text,
     process_hourly,
     transport_every_row_dataset,
+    transport_toy,
     with_blocks,
     with_values,
 )
@@ -179,3 +181,43 @@ def test_t0_transport_parameter_present_and_nan(case, parameters):
 def test_t0_transport_every_row():
     """T0(b): every row of the module (ramps, bounds, delays, linepack), pinned before the groups refactor it."""
     assert_t0(transport_every_row_dataset())
+
+
+def test_t0_transport_hourly_with_conversion_blocks(monkeypatch):
+    """Review Focus 3: conversion has blocks, transport none: the transport is today's, on the full variables."""
+    import linopy
+
+    from pommes.tests.test_transport_pair_mask import _transport_description
+
+    plain = transport_toy([1.0] * 12, techs=["Z", "A", "H"])
+    for link in plain.link.values:  # the tech A carries nothing; Z, A, H is not alphabetical
+        resource = plain.transport_resource.copy()
+        resource.loc[{"link": link, "transport_tech": "A"}] = "nan"
+        plain = plain.assign(transport_resource=resource)
+    blocked = with_blocks(plain, conversion={"mill": 4})
+    tb = time_blocks(blocked)
+    assert tb.active and not np.isfinite(tb.tech_length["transport"].values).any()
+    expected = _transport_description(build_model(plain))
+
+    returned, received, guarded = {}, [], []
+    add_variables = linopy.Model.add_variables
+
+    def spy_variables(self, *args, **kwargs):
+        var = add_variables(self, *args, **kwargs)
+        returned[kwargs.get("name")] = var
+        return var
+
+    original = transport._TransportRows
+
+    class Spy(original):
+        def __init__(self, *args, **kwargs):
+            received.append(args[5] if len(args) > 5 else kwargs["capacity"])
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(linopy.Model, "add_variables", spy_variables)
+    monkeypatch.setattr(transport, "_TransportRows", Spy)
+    monkeypatch.setattr(transport, "check_group_coord", lambda *a, **k: guarded.append(a))
+    m = build_model(blocked)
+    assert _transport_description(m) == expected
+    assert len(received) == 1 and received[0] is returned["operation_transport_power_capacity"]
+    assert guarded == []
