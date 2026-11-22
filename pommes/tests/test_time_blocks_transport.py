@@ -14,6 +14,7 @@ from pommes.model.data_validation.dataset_check import (
     check_time_blocks,
 )
 from pommes.model.transport import transport_groups
+from pommes.tests.test_transport_fuel_emission import _balance_terms
 from pommes.tests.time_blocks_helper import (
     BLOCK_PARAMETERS,
     assert_same,
@@ -24,6 +25,9 @@ from pommes.tests.time_blocks_helper import (
     solved,
     transport_t2_availability_dataset,
     transport_t2_efficiency_dataset,
+    transport_t2_fuel_area_bunker_dataset,
+    transport_t2_fuel_from_end_dataset,
+    transport_t2_fuel_other_resource_dataset,
     transport_t2_hurdle_dataset,
     transport_t2_interior_dataset,
     transport_t2_mixed_group_costs_dataset,
@@ -650,13 +654,7 @@ def test_partition_missing_a_tech_fires(monkeypatch):
         transport_groups(p, tb)
 
 
-# --- interim guards (Tasks 2 to 5), deleted by the task that builds the rows ---
-
-
-def test_interim_guard_fuel():
-    with pytest.raises(NotImplementedError, match="fuel"):
-        build_model(toy_blocks(6, transport={"S": 3}, fuel={"S": 0.1}))
-    build_model(toy_blocks(6, transport={"S": 3}, fuel={"H": 0.1}))
+# --- interim guard (Task 6), deleted by the task that builds the rows ---
 
 
 def test_interim_guard_emissions():
@@ -767,8 +765,13 @@ def test_transport_block_equals_step_power_rows():
 # --- T2: the flat twin ---
 
 
-def _compare_with_twin(p, lengths):
-    """Block model against its flat twin (T2): objective, capacities, flows, net generation, adequacy duals."""
+def _compare_with_twin(p, lengths, idle=()):
+    """
+    Block model against its flat twin (T2): objective, capacities, flows, net generation, adequacy duals.
+
+    ``idle``: the (area, resource) rows that nothing touches at the optimum (no flow, no supply): their dual is any value
+    of an interval, which the optimum does not fix, so it is left out of the comparison.
+    """
     m, twin = solve_model(build_model(p)), solve_model(flat_twin(p, transport=lengths))
     tb = time_blocks(p)
     check_block_dims(m)
@@ -784,7 +787,9 @@ def _compare_with_twin(p, lengths):
         assert_same(ng, solved(twin, "operation_transport_net_generation").sel(transport_tech=techs), f"NG {L}")
     a, b = m.constraints["operation_adequacy_constraint"].dual, twin.constraints["operation_adequacy_constraint"].dual
     a, b = xr.align(a, b, join="exact")
-    np.testing.assert_allclose(a.values, b.transpose(*a.dims).values, rtol=1e-6, atol=1e-6 * float(abs(b).max()))
+    for area, resource in idle:
+        a, b = (x.where(~((x.area == area) & (x.resource == resource))) for x in (a, b))
+    np.testing.assert_allclose(a.fillna(0).values, b.transpose(*a.dims).fillna(0).values, rtol=1e-6, atol=1e-6 * float(abs(b).max()))
     return m, twin
 
 
@@ -873,11 +878,13 @@ def test_ramp_rows_structure():
     d0 = 2.0
     m = build_model(p)
     check_block_dims(m)
-    for name, sign in (("ramp_up_constraint", 1.0), ("ramp_down_constraint", -1.0)):
+    assert p.transport_ramp_up.sel(transport_tech="S").values.tolist() == [[0.1]] * 2  # the two rates differ
+    assert p.transport_ramp_down.sel(transport_tech="S").values.tolist() == [[0.12]] * 2
+    for name, sign, rate in (("ramp_up_constraint", 1.0, 0.1), ("ramp_down_constraint", -1.0, 0.12)):
         rows = _ramp_terms(m, p, name)
         assert set(rows) == {(l, b) for l in ("ab", "ba") for b in (1, 2, 3)}  # none on block 0
         for cur, prev, cap in rows.values():
-            assert (cur, prev, cap) == pytest.approx((sign / d0, -sign / d0, -0.1))
+            assert (cur, prev, cap) == pytest.approx((sign / d0, -sign / d0, -rate))
     # a ramp finite on one pair only, and the pair mask
     q = _ramps_on(p, {"ab": 0.1, "ba": 0.1}, {"ba": 0.1})
     m = build_model(q)
@@ -905,8 +912,8 @@ def test_t2_ramps_uneven_steps():
     power = solved(m, RAMP4 + "power").sel(transport_tech="S")
     cap = solved(m, "operation_transport_power_capacity").sel(transport_tech="S")
     step = (power - power.shift(time_block_4h=1)) / 2.0
-    for rate in (step, -step):
-        assert float((rate - 0.1 * cap).where(cap > 1e-6).max()) == pytest.approx(0.0, abs=1e-6)  # a link with no ship has none
+    for rate, bound in ((step, 0.1), (-step, 0.12)):  # up, then down
+        assert float((rate - bound * cap).where(cap > 1e-6).max()) == pytest.approx(0.0, abs=1e-6)  # a link with no ship has none
     free = solve_model(build_model(_ramps_on(p, {}, {})))
     assert abs(free.objective.value - m.objective.value) > 1.0  # the ramps matter
 
@@ -937,3 +944,128 @@ def test_t2_interior():
     assert bool(((con.rhs - con.lhs.solution).where(live) > 1e-6).any())
     hourly = solve_model(build_model(p.drop_vars(BLOCK_PARAMETERS, errors="ignore")))
     assert m.objective.value > hourly.objective.value + 1e-3  # holding the flow over the block costs something
+
+
+# --- Task 5: fuel drawn at transport_fuel_area ---
+
+POWER_IN12 = "operation_transport_block_12h_power_in"
+
+
+def _adequacy_nterm(m):
+    """{balance: number of terms of its left-hand side}: dead terms count (linopy drops them from the LP text)."""
+    return {n: m.constraints[n].lhs.nterm for n in m.constraints if n.startswith("operation_adequacy")}
+
+
+def test_fuel_gate_reads_the_group():
+    # H and T name oil as their fuel but burn none: only S (24 h) draws fuel. A gate read on another group's
+    # consumption would build a term of zero coefficients for them (they still have a fuel resource)
+    p = toy_blocks(48, techs=["H", "S", "T"], conversion={"bunker": 24}, transport={"S": 24, "T": 12}, fuel={"S": 0.1})
+    named = p.assign(transport_fuel_resource=p.transport_fuel_resource.copy(data=np.full(p.transport_fuel_resource.shape, "oil")))
+    m, m_named = build_model(p), build_model(named)
+    check_block_dims(m_named)
+    assert _adequacy_nterm(m_named) == _adequacy_nterm(m)
+    adequacy = [n for n in m_named.constraints if n.startswith("operation_adequacy")]
+    got = [t for n in adequacy for t in terms_of(m_named, n, POWER_IN24)]
+    assert got and all(v["transport_tech"] == "S" and c == pytest.approx(-0.1 * 24) for _, v, c in got)  # S draws, and it alone
+    assert list(m_named.constraints["operation_adequacy_block_24h_constraint"].labels.indexes["resource"]) == ["oil"]  # a daily balance
+    for name in adequacy:
+        assert not terms_of(m_named, name, POWER_IN12) and not terms_of(m_named, name, "operation_transport_power_in")
+
+
+def test_example_1_fuel_into_a_daily_balance():
+    phi, D = 0.1, 24.0
+    p = toy_blocks(48, conversion={"mill": 24, "bunker": 24}, transport={"S": 24}, fuel={"S": phi})
+    m = build_model(p)
+    check_block_dims(m)
+    name = "operation_adequacy_block_24h_constraint"
+    # oil is daily (bunker and S are 24 h); the cargo, which the hourly demand and spillage pin, is not
+    assert list(m.constraints[name].labels.indexes["resource"]) == ["oil"]
+    assert "oil" not in m.constraints["operation_adequacy_constraint"].labels.indexes["resource"]
+    got = terms_of(m, name, POWER_IN24)
+    assert len(got) == 2 * 2  # two links, two blocks
+    year = int(p.year_op[0])
+    for row, var, coeff in got:
+        # -phi * D_b, identity (block b into block b), at the "from" end of the link (S runs b to a on ab, a to b on ba)
+        assert coeff == pytest.approx(-phi * D)
+        assert row["resource"] == "oil" and var["time_block_24h"] == row["time_block_24h"]
+        assert var["transport_tech"] == "S" and var["year_op"] == year
+        assert row["area"] == p.transport_area_from.sel(link=var["link"], transport_tech="S").item()
+    assert {(var["link"], row["time_block_24h"]) for row, var, _ in got} == {(l, b) for l in ("ab", "ba") for b in (0, 1)}
+
+
+def _burnt(m, p):
+    """Fuel (MWh) the ships draw: the hourly ``H`` and the 24 h ``S``, from the solution."""
+    phi = p.transport_fuel_consumption
+    hourly = (solved(m, "operation_transport_power_in").sel(transport_tech="H") * float(phi.sel(transport_tech="H").max()))
+    block = solved(m, POWER_IN24).sel(transport_tech="S") * 24.0 * float(phi.sel(transport_tech="S").max())
+    return float(hourly.sum()), float(block.sum())
+
+
+def _fuel_twin(p, idle):
+    m, twin = _compare_with_twin(p, {"S": 24}, idle)
+    assert float(solved(m, POWER_IN24).sum()) > 0
+    # the fuel matters: the same ships burning nothing give another optimum
+    free = solve_model(build_model(p.assign(transport_fuel_consumption=xr.full_like(p.transport_fuel_consumption, np.nan))))
+    assert abs(free.objective.value - m.objective.value) > 1e-3
+    return m, twin
+
+
+def test_t2_fuel_from_end():
+    p = transport_t2_fuel_from_end_dataset()
+    m, _ = _fuel_twin(p, [("a", "oil"), ("b", "oil")])  # the cargo is burnt, no bunker runs
+    assert float(solved(m, "operation_transport_power_in").sel(transport_tech="H").sum()) > 0
+    # the cargo burnt leaves the mill's output at a: it makes what the ships inject and burn (nothing is demanded there)
+    mill = float(solved(m, "operation_conversion_power").sel(conversion_tech="mill", area="a").sum())
+    hourly, block = _burnt(m, p)
+    injected = float(solved(m, "operation_transport_power_in").sel(transport_tech="H").sum()) + 24.0 * float(
+        solved(m, POWER_IN24).sel(transport_tech="S").sum()
+    )
+    assert hourly > 0.1 and block > 0.1
+    assert mill == pytest.approx(injected + hourly + block, rel=1e-6)
+
+
+def test_t2_fuel_area_bunker():
+    p = transport_t2_fuel_area_bunker_dataset()
+    m, _ = _fuel_twin(p, [("a", "oil")])
+    _, block = _burnt(m, p)
+    oil = solved(m, "operation_conversion_power").sel(conversion_tech="bunker")
+    assert block > 0.1 and float(oil.sel(area="a").sum()) == 0.0  # the bunker at a has no capacity, b makes all of it
+    assert float(oil.sel(area="b").sum()) == pytest.approx(block, rel=1e-6)
+
+
+def test_t2_fuel_other_resource():
+    p = transport_t2_fuel_other_resource_dataset()
+    m, _ = _fuel_twin(p, [("b", "oil")])  # the ships burn at a (the "from" end of the cargo's way)
+    hourly, block = _burnt(m, p)
+    assert hourly > 0.1 and block > 0.1
+    oil = solved(m, "operation_conversion_power").sel(conversion_tech="bunker")
+    assert float(oil.sum()) == pytest.approx(hourly + block, rel=1e-6)
+
+
+def test_fuel_that_is_not_a_resource_draws_nothing_on_blocks():
+    """A ship whose fuel is no resource of the model adds no term to the balances: they are those of a ship that burns nothing."""
+    p = toy_blocks(48, conversion={"mill": 24, "bunker": 24}, transport={"S": 24}, fuel={"S": 0.1})
+    named = p.assign(transport_fuel_resource=xr.where(p.transport_fuel_resource == "oil", "bunker_oil", p.transport_fuel_resource))
+    assert "bunker_oil" not in named.resource
+    m, silent = build_model(named), build_model(p.assign(transport_fuel_consumption=xr.full_like(p.transport_fuel_consumption, np.nan)))
+    # live terms: a block term that routes onto its own length may leave dead ones (label -1), as the hourly ``+=`` does
+    assert _balance_terms(m) == _balance_terms(silent)
+    for name in m.constraints:
+        if name.startswith("operation_adequacy_block"):
+            assert terms(m, name) == terms(silent, name)
+    # and a fuel that is one does draw: the check is not vacuous
+    assert terms(build_model(p), "operation_adequacy_block_24h_constraint") != terms(silent, "operation_adequacy_block_24h_constraint")
+
+
+def test_t1_with_fuel():
+    from pommes.tests.time_blocks_helper import _t2_fuel
+
+    p = with_blocks(_t2_fuel([3.0] * 16, {"H": 1.5, "S": 3.0}, {"H": 0.1, "S": 0.2}), transport={"S": 3})
+    m = solve_model(build_model(p))
+    hourly = solve_model(build_model(p.drop_vars(BLOCK_PARAMETERS, errors="ignore")))
+    assert float(solved(m, "operation_transport_block_3h_power_in").sum()) > 0
+    assert_twin_equal(m, hourly, time_blocks(p), ["operation_transport_block_3h_power", "operation_transport_block_3h_power_in"])
+    a, b = m.constraints["operation_adequacy_constraint"].dual, hourly.constraints["operation_adequacy_constraint"].dual
+    a, b = xr.align(a, b, join="exact")
+    a, b = (x.where(~((x.area == "b") & (x.resource == "oil"))) for x in (a, b))  # no bunker at b, nothing burns there: no fixed dual
+    np.testing.assert_allclose(a.fillna(0).values, b.transpose(*a.dims).fillna(0).values, rtol=1e-6, atol=1e-6 * float(abs(b).max()))

@@ -324,11 +324,11 @@ def transport_t2_hurdle_dataset() -> xr.Dataset:
 def transport_t2_ramps_uneven_steps_dataset() -> xr.Dataset:
     """
     T2: steps of 2, 1 and 1 h repeated, L = 4 (each block starts with its long step: the ramp divisor 2 is neither
-    4/3 nor 4); ``S`` has availability 1, 0.4, 1, 0.4 per block, efficiency 0.8 and ramps 0.1, so that both ramp rows bind
-    and the power is not the power in.
+    4/3 nor 4); ``S`` has availability 1, 0.4, 1, 0.4 per block, efficiency 0.8 and ramps 0.1 (up) and 0.12 (down), so that both
+    ramp rows bind, a row that reads the other ramp is seen, and the power is not the power in.
     """
     avail = np.repeat([1.0, 0.4, 1.0, 0.4], 3)
-    p = _transport_t2([2.0, 1.0, 1.0] * 4, {"H": 1.5, "S": 3.0}, eff={"S": 0.8}, ramp={"S": (0.1, 0.1)}, availability={"S": avail})
+    p = _transport_t2([2.0, 1.0, 1.0] * 4, {"H": 1.5, "S": 3.0}, eff={"S": 0.8}, ramp={"S": (0.1, 0.12)}, availability={"S": avail})
     return with_blocks(p, transport={"S": 4})
 
 
@@ -347,6 +347,39 @@ def transport_t2_interior_dataset() -> xr.Dataset:
     cap[:, 0], cap[:, 1] = 1.5, 3.2  # H and S are capped, T is not: the three ships carry
     p["transport_power_capacity_max"] = (("link", "transport_tech", "year_op"), cap)
     return with_blocks(p, transport={"S": 24, "T": 12})
+
+
+def _t2_fuel(dt, caps, fuel, resource="oil", area=None, bunker=(100.0, 0.0), techs=("H", "S")):
+    """
+    ``_transport_t2`` with ships that burn fuel: ``fuel`` (tech -> consumption) of ``resource`` (``oil``: the bunker
+    conversion makes it, or ``cargo``), drawn at ``area`` (tech -> area, default the "from" end). The bunker has the
+    fixed capacity ``bunker`` (MW at ``a``, at ``b``: its fixed cost is then a constant and the oil duals are the
+    variable cost), so that the optimum is unique and the fuel is made where it is drawn.
+    """
+    p = _transport_t2(dt, caps, techs=techs, fuel=fuel, fuel_area=area or {})
+    p["transport_fuel_resource"] = p.transport_fuel_resource.where(p.transport_fuel_resource != "oil", resource)
+    cap = np.array([[10.0, bunker[0]], [0.0, bunker[1]]])
+    p["conversion_power_capacity_max"] = (("area", "conversion_tech"), cap)
+    p["conversion_power_capacity_min"] = (("area", "conversion_tech"), cap)
+    return p
+
+
+def transport_t2_fuel_from_end_dataset() -> xr.Dataset:
+    """T2: the ships burn the cargo itself (``H`` 0.1, block ``S`` 0.2) at the "from" end of each link: area ``a`` (``S`` runs a to b on ``ba``)."""
+    p = _t2_fuel([1.0] * 48, {"H": 1.5, "S": 3.0}, {"H": 0.1, "S": 0.2}, resource="cargo")
+    return with_blocks(p, transport={"S": 24})
+
+
+def transport_t2_fuel_area_bunker_dataset() -> xr.Dataset:
+    """T2: ``S`` burns oil drawn at area ``b`` (``transport_fuel_area``), the only area whose bunker has a capacity; the cargo goes a to b."""
+    p = _t2_fuel([1.0] * 48, {"H": 1.5, "S": 3.0}, {"S": 0.2}, area={"S": "b"}, bunker=(0.0, 100.0))
+    return with_blocks(p, transport={"S": 24})
+
+
+def transport_t2_fuel_other_resource_dataset() -> xr.Dataset:
+    """T2: the ships (``H`` 0.1, block ``S`` 0.2) burn oil, a resource other than their cargo, which the hourly bunker makes at ``a``; every resource is hourly."""
+    p = _t2_fuel([1.0] * 48, {"H": 1.5, "S": 3.0}, {"H": 0.1, "S": 0.2})
+    return with_blocks(p, transport={"S": 24})
 
 
 def lp_text(m) -> str:

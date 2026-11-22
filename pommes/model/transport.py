@@ -68,8 +68,8 @@ def _refuse_unbuilt_rows(p_g: Dataset) -> None:
     """
     Interim guard: refuse an input whose rows the block groups do not build yet.
 
-    A finite fuel consumption (Task 5) and a non-zero fuel emission factor
-    with a finite fuel consumption (Task 6, which removes the function).
+    A non-zero fuel emission factor with a finite fuel consumption (Task 6,
+    which removes the function).
     """
 
     def finite(name):
@@ -84,10 +84,6 @@ def _refuse_unbuilt_rows(p_g: Dataset) -> None:
             raise NotImplementedError(
                 f"{name}: fuel emissions of a block transport technology are not built yet."
             )
-    if fuel:
-        raise NotImplementedError(
-            "transport_fuel_consumption: fuel on a block transport technology is not built yet."
-        )
 
 
 def _group_variables(
@@ -232,8 +228,6 @@ class _TransportRows:
 
     def fuel(self, adequacy):
         """Fuel burnt by the link (e.g. ship bunker fuel), drawn from the balances."""
-        if self.L is not None:
-            return
         p = self.p
         # in proportion to the injected flow, drawn at transport_fuel_area: the
         # "from" end by default (no value, or one that is not an area), or any
@@ -255,7 +249,7 @@ class _TransportRows:
                 .where(p.resource == p.transport_fuel_resource)
                 .sum(["link", "transport_tech"])
             )
-            add_to_balances(adequacy, -fuel_drawn, self.tb)
+            add_to_balances(adequacy, -fuel_drawn, self.tb, src=self.L)
 
     def limits(self):
         """Power bounds, delays, linepack and ramps (a block group: power maximum, power_in and ramps)."""
