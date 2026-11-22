@@ -26,6 +26,15 @@ TAX = 7.0  # per tCO2
 
 _TOY = Path(pommes.__file__).parent / "examples" / "toy_trade" / "toy_trade.py"
 _FACTORS = ("transport_fuel_emission_factor", "transport_fuel_total_emission_factor")
+_ROWS = ("operation_carbon_emissions_def", "operation_total_carbon_emissions_def")
+
+
+def _is_todays_model(q):
+    """q builds as it does without the two factors: same LP text and same number of terms in both emission rows
+    (linopy drops zero coefficients from the text, so a term that is all zeros shows only in the number of terms)."""
+    mp, mq = build_model(q.drop_vars([n for n in _FACTORS if n in q])), build_model(q)
+    assert lp_text(mp) == lp_text(mq)
+    assert {r: mp.constraints[r].lhs.nterm for r in _ROWS} == {r: mq.constraints[r].lhs.nterm for r in _ROWS}
 
 
 @pytest.fixture()
@@ -34,7 +43,7 @@ def parameters_transport(parameters_dispatch_invest, transport, carbon):
     return xr.merge([parameters_dispatch_invest, transport, carbon, xr.Dataset(flags)])
 
 
-def _one_way(parameters_transport, wind_area_1=(1.0, 1.0, 1.0)):
+def _one_way(parameters_transport, wind_area_1=(1.0, 1.0, 1.0), year_op=(2030,)):
     """Link_1 from area_1 to area_2 over three hours; area 2 cannot generate; the link burns electricity."""
     p = parameters_transport.sel(
         conversion_tech=["wind_onshore"],
@@ -44,7 +53,7 @@ def _one_way(parameters_transport, wind_area_1=(1.0, 1.0, 1.0)):
         resource=["electricity"],
         year_dec=[2040, 2050],
         year_inv=[2030],
-        year_op=[2030],
+        year_op=list(year_op),
     ).copy(deep=True)
     p["transport_hurdle_costs"] = p.transport_hurdle_costs / 8760
     p["conversion_power_capacity_investment_max"] = p.conversion_power_capacity_investment_max.expand_dims(
@@ -226,8 +235,16 @@ def test_two_operating_conditions(parameters_transport):
 @pytest.mark.parametrize("value", [0.0, np.nan])
 def test_zero_or_nan_factor_is_todays_model(parameters_transport, name, value):
     p = _one_way(parameters_transport)
-    assert lp_text(build_model(p)) == lp_text(build_model(p.assign({name: value})))
-    assert lp_text(build_model(p)) == lp_text(build_model(p.assign({n: value for n in _FACTORS})))
+    _is_todays_model(p.assign({name: value}))
+    _is_todays_model(p.assign({n: value for n in _FACTORS}))
+
+
+def test_absent_factors_is_todays_model(parameters_transport):
+    """A dataset without the two variables (not through check_inputs, or a 0.7.0 file) builds the same model."""
+    p = _one_way(parameters_transport)
+    assert all(name in p for name in _FACTORS)
+    _is_todays_model(p.drop_vars(list(_FACTORS)))
+    _is_todays_model(p.assign({n: 0.0 for n in _FACTORS}))
 
 
 def test_each_term_is_in_its_own_row_only(parameters_transport):
@@ -265,7 +282,22 @@ def test_no_term_where_the_pair_does_not_exist_or_burns_no_fuel(parameters_trans
     p["transport_fuel_consumption"] = ghost
     p["transport_fuel_resource"] = xr.DataArray("electricity")
     factors = {name: xr.DataArray(TAXED).broadcast_like(ghost) for name in _FACTORS}
-    assert lp_text(build_model(p)) == lp_text(build_model(p.assign(factors)))
+    _is_todays_model(p.assign(factors))
     # a zero consumption burns no fuel either
     p0 = p.assign(transport_fuel_consumption=ghost.fillna(0.0).where(p.transport_tech == "power_line", 0.0))
-    assert lp_text(build_model(p0)) == lp_text(build_model(p0.assign(factors)))
+    _is_todays_model(p0.assign(factors))
+
+
+def test_factor_non_zero_in_one_year_only(parameters_transport):
+    """Two operating years: a factor that is zero in one of them emits only in the other, in each row."""
+    p = _one_way(parameters_transport, year_op=(2030, 2040))
+    taxed = xr.DataArray([0.0, TAXED], coords=[p.year_op])
+    total = xr.DataArray([TOTAL, 0.0], coords=[p.year_op])
+    _, base = _solve(p)
+    _, s = _solve(p, taxed, total)
+    burnt = s.operation_transport_power_in.sum(["link", "transport_tech"]) * CONSUMPTION * p.time_step_duration
+    assert float(burnt.sel(year_op=2030).sum()) > 0 and float(burnt.sel(year_op=2040).sum()) > 0
+    for name, factor in (("operation_carbon_emissions", taxed), ("operation_total_carbon_emissions", total)):
+        extra = (s[name] - base[name]).sel(area="area_2")
+        np.testing.assert_allclose(extra.transpose("year_op", "hour").values, (factor * burnt).transpose("year_op", "hour").values, atol=1e-9)
+        np.testing.assert_allclose((s[name] - base[name]).sel(area="area_1").values, 0.0, atol=1e-9)
