@@ -685,16 +685,16 @@ POWER24, POWER_IN24 = "operation_transport_block_24h_power", "operation_transpor
 
 
 def test_transport_block_availability():
-    p = toy_blocks(48, transport={"S": 24}, availability={"S": DAY + [np.nan] * 24})
+    # a block with a 0.5, a block of NaN, a block of 1.2 and NaN (NaN reads as 1 before the minimum)
+    p = toy_blocks(72, transport={"S": 24}, availability={"S": DAY + [np.nan] * 24 + [1.2] * 12 + [np.nan] * 12})
     tb = time_blocks(p)
     got = transport_block_availability(p, tb, 24, ["S", "H"])
     assert list(got.indexes["transport_tech"]) == ["S", "H"]
-    # NaN reads as 1 before the minimum; a block of NaN gives 1; the tech without availability gives 1
-    np.testing.assert_allclose(got.sel(transport_tech="S", link="ab", year_op=2030).values, [0.5, 1.0])
-    np.testing.assert_allclose(got.sel(transport_tech="H", link="ab", year_op=2030).values, [1.0, 1.0])
-    assert got.sizes["time_block_24h"] == 2 and "hour" not in got.dims
+    np.testing.assert_allclose(got.sel(transport_tech="S", link="ab", year_op=2030).values, [0.5, 1.0, 1.0])
+    np.testing.assert_allclose(got.sel(transport_tech="H", link="ab", year_op=2030).values, [1.0, 1.0, 1.0])  # none given
+    assert got.sizes["time_block_24h"] == 3 and "hour" not in got.dims
     # two operating conditions are aggregated each alone
-    b = xr.DataArray(np.ones(48), dims="hour", coords={"hour": p.hour})
+    b = xr.DataArray(np.ones(72), dims="hour", coords={"hour": p.hour})
     b[3] = 0.7
     a = p.transport_availability.sel(transport_tech=["S"]).squeeze(drop=True)
     both = xr.concat([a, a * 0 + b], dim=pd.Index(["x", "y"], name="operating_condition"))
@@ -702,8 +702,8 @@ def test_transport_block_availability():
     got = transport_block_availability(q, tb, 24, ["S"])
     assert {"operating_condition", "time_block_24h"} <= set(got.dims)
     s = got.sel(transport_tech="S", link="ab", year_op=2030)
-    np.testing.assert_allclose(s.sel(operating_condition="x").values, [0.5, 1.0])
-    np.testing.assert_allclose(s.sel(operating_condition="y").values, [0.7, 1.0])
+    np.testing.assert_allclose(s.sel(operating_condition="x").values, [0.5, 1.0, 1.0])
+    np.testing.assert_allclose(s.sel(operating_condition="y").values, [0.7, 1.0, 1.0])
     # no hour: the value itself, NaN read as 1
     flat = p.assign(transport_availability=xr.where(p.transport_availability.isel(hour=0, drop=True).isnull(), np.nan, 0.4))
     out = transport_block_availability(flat, tb, 24, ["S", "H"])
