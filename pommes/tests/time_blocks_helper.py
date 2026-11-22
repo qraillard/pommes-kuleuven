@@ -1156,7 +1156,8 @@ def flexdem_ratio_dataset() -> xr.Dataset:
     ``flexdem_block_dataset`` with ratios that bind and no ramp: area ``a`` meets the maximum, area ``b`` the minimum.
 
     The areas are independent, so each one gets the flexible heat energy per block (probed) that pushes it against
-    one of the two limits, with a unique optimum.
+    one of the two limits. The objective is unique; the split of the flexible demand between blocks is not (only its
+    sum over the blocks is), so tests compare that sum.
     """
     return _ratio_cells(flexdem_block_dataset())
 
