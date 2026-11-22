@@ -864,6 +864,55 @@ def combined_all_block_carbon_dataset() -> xr.Dataset:
     return with_blocks(p, combined={t: 2 for t in CARBON_BOILERS})
 
 
+def with_transport_emissions(p: xr.Dataset, taxed=None, total=None, **carbon) -> xr.Dataset:
+    """
+    ``p`` with the two emission factors of the fuel burnt by transport and carbon on (``with_carbon``: ``tax``, ``goal``).
+
+    ``taxed`` is ``transport_fuel_emission_factor`` (seen by the carbon tax), ``total`` is
+    ``transport_fuel_total_emission_factor`` (seen by the goals): a number for every tech or ``{tech: value}`` (the other
+    techs get 0); None leaves the parameter as it is.
+    """
+    out = {}
+    for name, value in (("transport_fuel_emission_factor", taxed), ("transport_fuel_total_emission_factor", total)):
+        if value is not None:
+            da = xr.zeros_like(p.transport_fixed_cost)
+            for tech in p.indexes["transport_tech"]:
+                da.loc[{"transport_tech": tech}] = value.get(tech, 0.0) if isinstance(value, dict) else value
+            out[name] = da
+    return with_carbon(p.assign(out), **carbon)
+
+
+EMISSION_TAXED, EMISSION_TOTAL = 0.25, 0.4  # tCO2 per MWh of fuel burnt: seen by the tax, seen by the goals
+
+
+def _fuel_emissions(p: xr.Dataset, **carbon) -> xr.Dataset:
+    return with_transport_emissions(p, EMISSION_TAXED, EMISSION_TOTAL, tax=7.0, **carbon)
+
+
+def transport_t2_fuel_emissions_dataset() -> xr.Dataset:
+    """T2: the ships (``H`` 0.1, block ``S`` 0.2) burn oil from the hourly bunker; both factors (0.25 and 0.4), a carbon tax of 7 and a goal of 2000 tCO2 a year in area ``b`` (the goal binds: it is 2628 without it)."""
+    p = _fuel_emissions(_t2_fuel([1.0] * 48, {"H": 1.5, "S": 3.0}, {"H": 0.1, "S": 0.2}))
+    return with_blocks(p.assign(carbon_goal_area=xr.DataArray([np.nan, 2000.0], dims="area", coords={"area": p.area})), transport={"S": 24})
+
+
+def transport_t2_fuel_supplier_emissions_dataset() -> xr.Dataset:
+    """T2: as ``t2_fuel_emissions`` without a goal, the hourly ``bunker`` emits 0.3 tCO2 per MWh of oil (the supplier's own factor)."""
+    p = _t2_fuel([1.0] * 48, {"H": 1.5, "S": 3.0}, {"H": 0.1, "S": 0.2})
+    return with_blocks(with_transport_emissions(p, EMISSION_TAXED, EMISSION_TOTAL, conversion={"bunker": 0.3}, tax=7.0), transport={"S": 24})
+
+
+def transport_t2_fuel_short_last_block_dataset() -> xr.Dataset:
+    """T2: fuel and both emission factors (a tax of 7), 60 h and L = 24 (blocks of 24, 24 and 12 h)."""
+    p = _fuel_emissions(_t2_fuel([1.0] * 60, {"H": 1.5, "S": 3.0}, {"H": 0.1, "S": 0.2}))
+    return with_blocks(p, transport={"S": 24})
+
+
+def transport_t2_fuel_uneven_steps_dataset() -> xr.Dataset:
+    """T2: fuel and both emission factors (a tax of 7), steps of 2, 1 and 1 h repeated, L = 4 (each block starts with its long step)."""
+    p = _fuel_emissions(_t2_fuel([2.0, 1.0, 1.0] * 4, {"H": 1.5, "S": 3.0}, {"H": 0.1, "S": 0.2}))
+    return with_blocks(p, transport={"S": 4})
+
+
 def solve_model(m):
     """Solve ``m`` with HiGHS and assert it is optimal; returns ``m``."""
     assert m.solve(solver_name="highs")[:2] == ("ok", "optimal")

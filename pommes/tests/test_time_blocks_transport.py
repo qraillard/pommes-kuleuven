@@ -34,8 +34,16 @@ from pommes.tests.time_blocks_helper import (
     transport_t2_ramps_uneven_steps_dataset,
     transport_t2_short_last_block_dataset,
     transport_t2_two_lengths_dataset,
+    transport_t2_fuel_emissions_dataset,
+    transport_t2_fuel_short_last_block_dataset,
+    transport_t2_fuel_supplier_emissions_dataset,
+    transport_t2_fuel_uneven_steps_dataset,
     transport_toy,
     with_blocks,
+    with_transport_emissions,
+    EMISSION_TAXED,
+    EMISSION_TOTAL,
+    lp_text,
 )
 from pommes.utils import (
     TimeBlocks,
@@ -654,21 +662,124 @@ def test_partition_missing_a_tech_fires(monkeypatch):
         transport_groups(p, tb)
 
 
-# --- interim guard (Task 6), deleted by the task that builds the rows ---
+# --- Task 6: the two fuel emission terms ---
+
+TAXED_ROW, TOTAL_ROW = "operation_carbon_emissions_def", "operation_total_carbon_emissions_def"
+POWER_IN3 = "operation_transport_block_3h_power_in"
+_ROWS = (TAXED_ROW, TOTAL_ROW)
 
 
-def test_interim_guard_emissions():
-    def factors(p, tech):
-        da = xr.zeros_like(p.transport_fixed_cost)
-        da.loc[{"transport_tech": tech}] = 0.3
-        return p.assign(transport_fuel_emission_factor=da, transport_fuel_total_emission_factor=da)
+def _emission_nterm(m):
+    return {r: m.constraints[r].lhs.nterm for r in _ROWS}
 
-    p = toy_blocks(6, transport={"S": 3}, fuel={"S": 0.1})
-    with pytest.raises(NotImplementedError, match="emission"):
-        build_model(factors(p, "S"))
-    build_model(factors(toy_blocks(6, transport={"S": 3}, fuel={"H": 0.1}), "H"))
-    # a factor without fuel on the block ship is no emission
-    build_model(factors(toy_blocks(6, transport={"S": 3}), "S"))
+
+def _emissions_toy(dt, transport, fuel, taxed=EMISSION_TAXED, total=EMISSION_TOTAL):
+    return with_blocks(with_transport_emissions(transport_toy(dt, fuel=fuel), taxed, total), transport=transport)
+
+
+def test_block_emission_terms_structure():
+    dt = [1.0, 2.0, 1.0, 2.0, 1.0, 2.0]
+    phi = 0.1
+    p = _emissions_toy(dt, {"S": 3}, {"S": phi})
+    m = build_model(p)
+    check_block_dims(m)
+    for row, factor, other in ((TAXED_ROW, EMISSION_TAXED, EMISSION_TOTAL), (TOTAL_ROW, EMISSION_TOTAL, EMISSION_TAXED)):
+        got = terms_of(m, row, POWER_IN3)
+        assert len(got) == 2 * 6  # two links, six hours
+        for r, var, coeff in got:
+            # phi * f * (the step of the hour), at the arrival area of the link, in every hour of the block
+            assert coeff == pytest.approx(phi * factor * dt[r["hour"]]), (row, coeff, other)
+            assert var["time_block_3h"] == r["hour"] // 2  # blocks of 3 h hold the steps (1, 2) and var["transport_tech"] == "S"
+            assert r["area"] == p.transport_area_to.sel(link=var["link"], transport_tech="S").item()
+        assert {(var["link"], r["hour"]) for r, var, _ in got} == {(l, h) for l in ("ab", "ba") for h in range(6)}
+    for row in _ROWS:  # no hourly term of the block ship
+        assert not terms_of(m, row, "operation_transport_power_in")
+
+
+@pytest.mark.parametrize("zero", [0.0, np.nan])
+def test_zero_factor_adds_nothing_on_blocks(zero):
+    p = _emissions_toy([1.0] * 6, {"S": 3}, {"S": 0.1}, zero, zero)
+    base = p.drop_vars(["transport_fuel_emission_factor", "transport_fuel_total_emission_factor"])
+    m, m0 = build_model(p), build_model(base)
+    assert _emission_nterm(m) == _emission_nterm(m0)
+    assert lp_text(m) == lp_text(m0)
+    # one factor set: its row gets the term, the other row stays as it was
+    one = build_model(_emissions_toy([1.0] * 6, {"S": 3}, {"S": 0.1}, EMISSION_TAXED, zero))
+    assert one.constraints[TAXED_ROW].lhs.nterm > m0.constraints[TAXED_ROW].lhs.nterm
+    assert one.constraints[TOTAL_ROW].lhs.nterm == m0.constraints[TOTAL_ROW].lhs.nterm
+
+
+def test_factor_on_the_hourly_ship_only():
+    fuel = {"H": 0.1, "S": 0.2}
+    p = with_blocks(with_transport_emissions(transport_toy([1.0] * 6, fuel=fuel), {"H": 0.25}, {"H": 0.4}), transport={"S": 3})
+    m = build_model(p)
+    check_block_dims(m)
+    for row in _ROWS:
+        assert terms_of(m, row, "operation_transport_power_in")
+        assert not terms_of(m, row, POWER_IN3)
+    # the block ship's fuel does not change the emission rows
+    only_h = build_model(with_blocks(with_transport_emissions(transport_toy([1.0] * 6, fuel={"H": 0.1}), {"H": 0.25}, {"H": 0.4}), transport={"S": 3}))
+    assert _emission_nterm(m) == _emission_nterm(only_h)
+
+
+def test_all_block_transport_with_emissions():
+    p = _emissions_toy([1.0] * 6, {"H": 3, "S": 3}, {"H": 0.1, "S": 0.2})
+    m = build_model(p)  # no hourly variable: reading it would raise a KeyError
+    check_block_dims(m)
+    assert "operation_transport_power_in" not in m.variables
+    for row in _ROWS:
+        assert {var["transport_tech"] for _, var, _ in terms_of(m, row, POWER_IN3)} == {"H", "S"}
+
+
+def test_mixed_ships_one_arrival_area():
+    p = _emissions_toy([1.0] * 6, {"S": 3}, {"H": 0.1, "S": 0.2})
+    m = build_model(p)
+    for row in _ROWS:
+        # H runs a to b on ab and S a to b on ba: the area b receives both terms in each hour
+        by_row = {}
+        for name in ("operation_transport_power_in", POWER_IN3):
+            for r, var, coeff in terms_of(m, row, name):
+                by_row.setdefault((r["area"], r["hour"]), {})[(name, var["link"])] = coeff
+        both = by_row[("b", 2)]
+        assert set(both) == {("operation_transport_power_in", "ab"), (POWER_IN3, "ba")}
+        factor = EMISSION_TAXED if row == TAXED_ROW else EMISSION_TOTAL
+        assert both[("operation_transport_power_in", "ab")] == pytest.approx(0.1 * factor)
+        assert both[(POWER_IN3, "ba")] == pytest.approx(0.2 * factor)
+
+
+def _emissions_twin(p, L=24, idle=(("b", "oil"),)):
+    m, twin = _compare_with_twin(p, {"S": L}, idle)
+    for name in ("operation_carbon_emissions", "operation_total_carbon_emissions"):
+        assert_same(solved(m, name), solved(twin, name), name)
+    # the oil the ships draw is made by the bunker: the fuel drawn is the same hour by hour
+    assert_same(solved(m, "operation_conversion_power"), solved(twin, "operation_conversion_power"), "conversion")
+    assert float(solved(m, POWER_IN24 if L == 24 else f"operation_transport_block_{L}h_power_in").sum()) > 0
+    return m, twin
+
+
+def test_t2_fuel_emissions():
+    m, _ = _emissions_twin(transport_t2_fuel_emissions_dataset())
+    taxed, total = (solved(m, n).sel(area="b") for n in ("operation_carbon_emissions", "operation_total_carbon_emissions"))
+    assert float(taxed.sum()) > 0.1
+    np.testing.assert_allclose(total.values, taxed.values * EMISSION_TOTAL / EMISSION_TAXED, atol=1e-9)  # not swapped
+    for name in ("operation_carbon_emissions", "operation_total_carbon_emissions"):
+        assert float(abs(solved(m, name).sel(area="a")).max()) == 0.0  # the arrival area only
+    assert float(solved(m, "operation_carbon_costs").sum()) > 1e-3  # the tax is paid
+    assert np.nanmax(abs(m.constraints["operation_carbon_goal_area_constraint"].dual.values)) > 1e-9  # the goal binds
+
+
+def test_t2_fuel_supplier_emissions():
+    m, _ = _emissions_twin(transport_t2_fuel_supplier_emissions_dataset())
+    # the bunker's own factor counts in the supplier's area: area a, where it is built
+    assert float(solved(m, "operation_carbon_emissions").sel(area="a").sum()) > 0.1
+
+
+def test_t2_fuel_emissions_short_last_block():
+    _emissions_twin(transport_t2_fuel_short_last_block_dataset())
+
+
+def test_t2_fuel_emissions_uneven_steps():
+    _emissions_twin(transport_t2_fuel_uneven_steps_dataset(), L=4)
 
 
 # --- Task 3: block availability, power maximum, power_in with efficiency ---

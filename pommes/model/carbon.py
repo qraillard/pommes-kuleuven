@@ -8,6 +8,7 @@ from xarray import Dataset
 from pommes.model.combined import combined_groups
 from pommes.model.conversion import conversion_groups
 from pommes.model.net_import import net_import_groups
+from pommes.model.transport import transport_groups
 from pommes.utils import (
     TimeBlocks,
     annual_mask,
@@ -328,25 +329,25 @@ def add_carbon(
 
     if "transport" in p.keys() and p.transport:
         # Fuel burnt by the links (tCO2 per MWh of fuel), counted in the arrival area of the link at the injection step,
-        # whatever transport_fuel_area is. Each row gets its term only if a pair of the model burns fuel with a non-zero
-        # factor.
-        for row, name in (
-            (operation_carbon_emissions_def, "transport_fuel_emission_factor"),
-            (operation_total_carbon_emissions_def, "transport_fuel_total_emission_factor"),
-        ):
-            if name not in p:
-                continue
-            burnt = p.transport_fuel_consumption.fillna(0) * p[name].fillna(0)
-            if ((burnt != 0) & (v.operation_transport_power_capacity.labels >= 0)).any():
-                _add_emissions(
-                    [row],
-                    (v.operation_transport_power_in * burnt)
-                    .where(p.area == p.transport_area_to)
-                    .sum(["link", "transport_tech"]),
-                    tb,
-                    None,
-                    p.time_step_duration,
-                )
+        # whatever transport_fuel_area is. Each row gets its term only if a pair of the group burns fuel with a non-zero
+        # factor. The hourly group as always; a block group as tCO2 per block (Pin_b x burnt x D_b) spread over its hours.
+        for L, p_g, _ in transport_groups(p, tb):
+            power_in = v[f"{block_prefix('transport', L)}power_in"]
+            labels = v.operation_transport_power_capacity.labels.sel(
+                transport_tech=p_g.indexes["transport_tech"]
+            )
+            for row, name in (
+                (operation_carbon_emissions_def, "transport_fuel_emission_factor"),
+                (operation_total_carbon_emissions_def, "transport_fuel_total_emission_factor"),
+            ):
+                if name not in p_g:
+                    continue
+                burnt = p_g.transport_fuel_consumption.fillna(0) * p_g[name].fillna(0)
+                if ((burnt != 0) & (labels >= 0)).any():
+                    emitted = (power_in * burnt).where(p_g.area == p_g.transport_area_to).sum(["link", "transport_tech"])
+                    if L is not None:
+                        emitted = emitted * tb.duration[L]
+                    _add_emissions([row], emitted, tb, L, p.time_step_duration)
 
     # Costs - Carbon
 

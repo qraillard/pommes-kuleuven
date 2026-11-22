@@ -64,28 +64,6 @@ def transport_groups(
     return out
 
 
-def _refuse_unbuilt_rows(p_g: Dataset) -> None:
-    """
-    Interim guard: refuse an input whose rows the block groups do not build yet.
-
-    A non-zero fuel emission factor with a finite fuel consumption (Task 6,
-    which removes the function).
-    """
-
-    def finite(name):
-        return name in p_g and bool(np.isfinite(p_g[name]).any())
-
-    fuel = finite("transport_fuel_consumption")
-    for name in (
-        "transport_fuel_emission_factor",
-        "transport_fuel_total_emission_factor",
-    ):
-        if fuel and name in p_g and bool((p_g[name].fillna(0) != 0).any()):
-            raise NotImplementedError(
-                f"{name}: fuel emissions of a block transport technology are not built yet."
-            )
-
-
 def _group_variables(
     m: Model, p: Dataset, tb: TimeBlocks, L: int | None, pair
 ):
@@ -884,7 +862,6 @@ def add_transport(
     # every hourly label, and each row is the hourly row on the block axis.
 
     for L, p_g, _ in blocks:
-        _refuse_unbuilt_rows(p_g)
         variables = _group_variables(m, p_g, tb, L, restrict(pair_exists, p_g))
         add_to_balances(
             operation_adequacy_constraint,
