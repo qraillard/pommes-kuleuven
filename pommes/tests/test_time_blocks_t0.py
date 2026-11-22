@@ -18,6 +18,7 @@ from pommes.tests.time_blocks_helper import (
     hand_toy,
     lp_text,
     process_hourly,
+    transport_every_row_dataset,
     with_blocks,
     with_values,
 )
@@ -67,7 +68,7 @@ def test_t0_lp_identical(case, request):
     assert_t0(p)
 
 
-@pytest.mark.parametrize("module", ["conversion", "combined"])
+@pytest.mark.parametrize("module", ["conversion", "combined", "transport"])
 def test_t0_length_on_a_module_that_is_off(parameters, module):
     off = parameters.assign({module: np.array(False)})
     lengths = {
@@ -162,3 +163,19 @@ def test_t0_carbon_with_nan_lengths(parameters):
     m = build_model(p)
     assert "operation_carbon_emissions_def" in m.constraints
     assert all("_block_" not in n for n in [*m.variables, *m.constraints])
+
+
+@pytest.mark.parametrize("case", ["parameters", "transport_fuel"])
+def test_t0_transport_parameter_present_and_nan(case, parameters):
+    p = parameters if case == "parameters" else _transport_fuel_dataset(parameters)
+    assert_t0(p)
+    five = with_blocks(p)
+    assert five["transport_time_block_hrs"].dims == ("transport_tech",)
+    assert bool(five["transport_time_block_hrs"].isnull().all())
+    four = five.drop_vars("transport_time_block_hrs")
+    assert lp_text(build_model(five)) == lp_text(build_model(four))
+
+
+def test_t0_transport_every_row():
+    """T0(b): every row of the module (ramps, bounds, delays, linepack), pinned before the groups refactor it."""
+    assert_t0(transport_every_row_dataset())

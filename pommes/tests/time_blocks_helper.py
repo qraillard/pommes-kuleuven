@@ -27,6 +27,7 @@ _PARAMETERS = (
     ("conversion_time_block_hrs", "conversion_tech"),
     ("combined_time_block_hrs", "combined_tech"),
     ("resource_time_block_hrs", "resource"),
+    ("transport_time_block_hrs", "transport_tech"),
 )
 
 # every block parameter: dropping them all gives the hourly model
@@ -48,14 +49,15 @@ def with_blocks(
     combined: dict[str, float] | None = None,
     resource: dict[str, float] | None = None,
     rule: dict[str, str] | None = None,
+    transport: dict[str, float] | None = None,
 ) -> xr.Dataset:
     """
-    ``p`` with the four block parameters set (NaN / ``"min"`` elsewhere).
+    ``p`` with the five block parameters set (NaN / ``"min"`` elsewhere).
 
     A parameter whose dimension is not in ``p`` is left out.
     """
     p = p.copy()
-    given = (conversion, combined, resource)
+    given = (conversion, combined, resource, transport)
     for (name, dim), values in zip(_PARAMETERS, given):
         if dim in p.coords:
             p[name] = _per(p, dim, values)
@@ -67,6 +69,54 @@ def with_blocks(
         p["conversion_time_block_rule"] = xr.DataArray(
             r.astype(str), dims="conversion_tech", coords={"conversion_tech": labels}
         )
+    return p
+
+
+def transport_every_row_dataset() -> xr.Dataset:
+    """
+    T0(b): every row of the transport module on three 1 h steps, no block length.
+
+    Ramps up and down, an availability that varies with the hour, capacity bounds, investment bounds, delays of 1 h
+    and 2 h on two pairs, a linepack on two other pairs, and pairs with none of these (the power line).
+    """
+    p = xr.merge([_fixture("parameters_dispatch_invest"), _fixture("transport")])
+    p["transport_hurdle_costs"] = p.transport_hurdle_costs / 8760
+    p = p.sel(
+        conversion_tech=["wind_onshore"],
+        hour=[0, 1, 2],
+        resource=["electricity", "methane"],
+        year_dec=[2040, 2050],
+        year_inv=[2030],
+        year_op=[2030],
+    ).copy(deep=True)
+    p["conversion_availability"] = p.conversion_availability.expand_dims(area=p.area).copy()
+    p.conversion_availability.loc[dict(conversion_tech="wind_onshore")] = [[0.6, 0.3, 0.1], [0.4, 0.7, 0.9]]
+
+    def grid(fill, *dims):
+        coords = {d: p[d] for d in dims}
+        return xr.DataArray(np.full([p.sizes[d] for d in dims], fill), dims=dims, coords=coords)
+
+    lt, lty = ("link", "transport_tech"), ("link", "transport_tech", "year_op")
+    p["transport_ramp_up"] = grid(np.nan, *lty)
+    p["transport_ramp_up"][0, :, :] = 0.5
+    p["transport_ramp_down"] = grid(np.nan, *lty)
+    p["transport_ramp_down"][1, 0, :] = 0.7
+    p["transport_power_capacity_max"] = grid(np.nan, *lty)
+    p["transport_power_capacity_max"][1, :, :] = 5000.0
+    p["transport_power_capacity_min"] = grid(np.nan, *lty)
+    p["transport_power_capacity_min"][0, 1, :] = 0.0
+    p["transport_availability"] = grid(np.nan, "link", "transport_tech", "hour", "year_op")
+    p["transport_availability"][0, 0, :, :] = np.array([0.9, 0.6, 0.8])[:, None]
+    p["transport_power_capacity_investment_min"] = grid(np.nan, *lt)
+    p["transport_power_capacity_investment_max"] = grid(np.nan, *lt)
+    p["transport_power_capacity_investment_min"][0, 0], p["transport_power_capacity_investment_max"][0, 0] = 1.0, 10.0
+    p["transport_power_capacity_investment_min"][1, 0], p["transport_power_capacity_investment_max"][1, 0] = 2.0, 2.0
+    p["transport_delay"] = grid(0.0, *lt)
+    p["transport_delay"][0, 1] = 1.0
+    p["transport_delay"][1, 0] = 2.0
+    p["transport_linepack_capacity"] = grid(np.nan, *lty)
+    p["transport_linepack_capacity"][0, 0, :] = 5.0
+    p["transport_linepack_capacity"][1, 1, :] = 12.0
     return p
 
 
@@ -82,7 +132,7 @@ def assert_t0(p: xr.Dataset) -> None:
     """
     Without block inputs the model has no trace of them (T0 plumbing pin).
 
-    Builds ``p`` without the four parameters and with them all NaN: same LP
+    Builds ``p`` without the five parameters and with them all NaN: same LP
     text, no ``_block_`` name, no ``time_block_`` dimension, hourly adequacy
     over the full resource coordinate. Both models take the inactive path:
     this guards the NaN parameters and the ``tb`` plumbing, not drift against

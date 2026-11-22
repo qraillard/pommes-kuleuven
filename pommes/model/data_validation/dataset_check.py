@@ -12,6 +12,7 @@ from pommes.model.data_validation import ref_inputs
 from pommes.utils import (
     check_block_daily_cap,
     check_block_flexdem,
+    check_block_transport,
     has_operating_conditions,
     time_blocks,
 )
@@ -183,6 +184,7 @@ def check_time_blocks(ds: Dataset) -> None:
         tb = time_blocks(ds)
     check_block_daily_cap(ds, tb)
     check_block_flexdem(ds, tb)
+    check_block_transport(ds, tb)
 
 
 def check_inputs(ds: Dataset) -> Dataset:

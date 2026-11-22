@@ -817,3 +817,115 @@ def test_an_extra_dimension_without_check_inputs_is_a_clear_error(parameters, di
     p["resource_time_block_hrs"] = per(p, "resource", methane=24).expand_dims({dim: values})
     with pytest.raises(ValueError, match="resource_time_block_hrs: only the resource coordinate is allowed"):
         time_blocks(p)
+
+
+# --- transport technologies on blocks: derivation (spec section 4) ---
+
+NEST = "do not nest (neither divides the other)."
+
+
+def ships(S=24, mill=24, refinery=24, silo=False, hours=48, **kw):
+    """Spec section 4 toy: ``mill`` makes steel, ``refinery`` oil, ship ``S`` carries steel and burns oil."""
+    p = toy(
+        conversion={"mill": {"steel": 1.0}, "refinery": {"oil": 1.0}},
+        transport={"S": ("steel", "oil")},
+        storage={"silo": {"steel": 1.0}} if silo else None,
+        resources=("steel", "oil", "idle"),
+        hours=hours,
+        **kw,
+    )
+    p = setl(p, "conversion", **{k: v for k, v in (("mill", mill), ("refinery", refinery)) if v})
+    return setl(p, "transport", **({"S": S} if S else {}))
+
+
+def test_example_1_derivation():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = lengths_of(ships())
+    assert out["steel"] == 24 and out["oil"] == 24 and np.isnan(out["idle"])
+
+
+def test_hourly_ship_keeps_its_resources_hourly():
+    with pytest.warns(UserWarning, match="hourly because of transport tech S"):
+        out = lengths_of(ships(S=None, refinery=None))
+    assert np.isnan(out["steel"])
+
+
+def test_example_2_hourly_storage_warns():
+    text = (
+        "Time blocks give no gain on these balances: steel: hourly because of storage tech silo. "
+        "Force a length with resource_time_block_hrs."
+    )
+    with pytest.warns(UserWarning) as record:
+        out = lengths_of(ships(silo=True))
+    assert [str(w.message) for w in record].count(text) == 1
+    assert np.isnan(out["steel"]) and out["oil"] == 24
+
+
+def test_example_3_forced_lengths():
+    p = ships(silo=True)
+    for forced in (24, 168, 12):
+        q = p.assign(resource_time_block_hrs=per(p, "resource", steel=forced))
+        assert lengths_of(q)["steel"] == forced
+    q = p.assign(resource_time_block_hrs=per(p, "resource", steel=16))
+    with pytest.raises(ValueError) as e:
+        time_blocks(q)
+    assert str(e.value) == f"steel: conversion tech mill (24 h) and the forced balance length (16 h) {NEST}"
+    q = ships(mill=None, silo=True)
+    q = q.assign(resource_time_block_hrs=per(q, "resource", steel=16))
+    with pytest.raises(ValueError) as e:
+        time_blocks(q)
+    assert str(e.value) == f"steel: transport tech S (24 h) and the forced balance length (16 h) {NEST}"
+
+
+def test_r4_derived_ship_10h_mill_4h():
+    with pytest.raises(ValueError) as e:
+        time_blocks(ships(S=10, mill=4))
+    assert str(e.value) == (
+        "steel: transport tech S (10 h) is not a multiple of the smallest block length of the balance (4 h)."
+    )
+
+
+def test_r4_on_the_fuel_resource():
+    p = ships(refinery=None)
+    p = p.assign(resource_time_block_hrs=per(p, "resource", oil=16))
+    with pytest.raises(ValueError, match="oil: transport tech S"):
+        time_blocks(p)
+
+
+def test_r5_ship_carrying_electricity():
+    p = toy(
+        transport={"S": ("electricity", None)},
+        resources=("electricity", "steel", "idle"),
+        turpe=np.array(True),
+    )
+    with pytest.raises(ValueError, match="electricity"):
+        time_blocks(setl(p, "transport", S=24))
+    time_blocks(setl(p.assign(turpe=np.array(False)), "transport", S=24))
+
+
+def test_r10_every_balance_coarse_with_ships():
+    p = toy(transport={"S": ("steel", "ore")}, resources=("steel", "ore"), hours=48)
+    with pytest.raises(ValueError, match="hourly"):
+        time_blocks(setl(p, "transport", S=24))
+
+
+def test_r9_flexdem_window_on_a_derived_coarse_balance():
+    p = toy(
+        conversion={"hub": {"ore": 1}},
+        transport={"S": ("steel", None)},
+        hours=48,
+        flexdem=np.array(True),
+        flexdem_window_offset_hrs=np.array(0.0),
+    )
+    p["flexdem_demand"] = xr.DataArray(
+        np.ones((48, 3)), dims=("hour", "resource"), coords={"hour": p.hour, "resource": p.resource}
+    )
+    p["flexdem_conservation_hrs"] = xr.DataArray(
+        [12.0] * 3, dims="resource", coords={"resource": p.resource}
+    )
+    p = setl(p, "transport", S=24)
+    tb = time_blocks(p)
+    assert tb.resources(24) == ["steel"]
+    with pytest.raises(ValueError, match="steel.*12"):
+        check_block_flexdem(p, tb)

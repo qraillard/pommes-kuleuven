@@ -876,6 +876,12 @@ transport_delay:
   - link
   - transport_tech
   type: float64
+transport_time_block_hrs:
+  default: nan
+  index_set:
+  - transport_tech
+  type: float64
+  description: "Block length in hours of the flow variables of a transport technology, the same on all its links. NaN = hourly (the time step grid). Whole number of hours. A block technology takes no delay and no linepack."
 transport_power_capacity_min:
   default: nan
   index_set:

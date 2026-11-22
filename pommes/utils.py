@@ -754,7 +754,12 @@ def _contributors(p: Dataset, tech_length: dict) -> dict:
                     fuel = fuel & False
                 by_res = by_res | fuel
             hit[:, j] = _hits(by_res, "transport_tech", (techs, None))
-        add("transport tech", "transport_tech", hit)
+        add(
+            "transport tech",
+            "transport_tech",
+            hit,
+            tech_length["transport"].values,
+        )
     if _on(p, "process") and "process_factor" in p:
         add(
             "process tech",
@@ -791,7 +796,7 @@ def time_blocks(p: Dataset, warn: bool = True) -> TimeBlocks:
         module: _length_along(
             p, f"{module}_time_block_hrs", f"{module}_tech", module
         )
-        for module in ("conversion", "combined")
+        for module in ("conversion", "combined", "transport")
     }
     resource_length = _length_along(
         p, "resource_time_block_hrs", "resource", None
@@ -954,6 +959,64 @@ def check_block_daily_cap(p: Dataset, tb: TimeBlocks) -> None:
                 f"{tech}: block length {L} h neither divides nor is a "
                 f"multiple of operation_day_duration ({d} h), with a "
                 f"conversion_max_daily_production."
+            )
+
+
+def transport_pair_exists(p: Dataset) -> DataArray:
+    """Bool ``(link, transport_tech)``: the pair carries a resource of the model."""
+    grid = xr.DataArray(
+        np.zeros((p.sizes["link"], p.sizes["transport_tech"])),
+        coords=[p.link, p.transport_tech],
+    )
+    return xr.DataArray(
+        np.isin(
+            p.transport_resource.broadcast_like(grid)
+            .transpose("link", "transport_tech")
+            .values.astype(str),
+            p.resource.values.astype(str),
+        ),
+        coords=[p.link, p.transport_tech],
+    )
+
+
+def check_block_transport(p: Dataset, tb: TimeBlocks) -> None:
+    """R11, R12: a block transport technology takes no delay and no linepack."""
+    if not tb.active or "transport_resource" not in p:
+        return
+    length = tb.tech_length["transport"]
+    if not length.notnull().any():
+        return
+    exists = transport_pair_exists(p)
+    grid = xr.zeros_like(exists, dtype="float64")
+
+    def on_grid(da):
+        return da.broadcast_like(grid).transpose("link", "transport_tech")
+
+    delay = (
+        on_grid(p.transport_delay.fillna(0)) if "transport_delay" in p else grid
+    )
+    linepack = grid.astype(bool)
+    if "transport_linepack_capacity" in p:
+        lp = np.isfinite(p.transport_linepack_capacity)
+        lp = lp.any([d for d in lp.dims if d not in ("link", "transport_tech")])
+        linepack = on_grid(lp)
+    techs = list(p.transport_tech.values)
+    links = p.link.values
+    for refused in ("delay", "linepack"):
+        bad = exists & ((delay != 0) if refused == "delay" else linepack)
+        for i, tech in enumerate(techs):
+            L = length.values[i]
+            if np.isnan(L) or not bad.values[:, i].any():
+                continue
+            j = int(np.flatnonzero(bad.values[:, i])[0])
+            what = (
+                f"transport_delay = {float(delay.values[j, i])} h"
+                if refused == "delay"
+                else "transport_linepack_capacity is finite"
+            )
+            raise ValueError(
+                f"{tech}: {what} on link {links[j]}: a block transport "
+                f"technology ({int(L)} h) takes no {refused}."
             )
 
 
@@ -1188,6 +1251,7 @@ BLOCK_MODULES = (
     "spillage",
     "conversion",
     "combined",
+    "transport",
     "flexdem",
     "net_import",
     "carbon",

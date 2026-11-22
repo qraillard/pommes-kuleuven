@@ -9,10 +9,12 @@ from pommes.model.annuity import annuity_full_life, full_life_window
 from pommes.utils import (
     TimeBlocks,
     add_to_balances,
+    check_block_transport,
     condition_coords,
     condition_mask,
     expected_over_conditions,
     time_blocks,
+    transport_pair_exists,
 )
 
 
@@ -177,6 +179,13 @@ def add_transport(
     tb = time_blocks(model_parameters) if tb is None else tb
     m = model
     p = model_parameters
+    # R11, R12 on the full dataset, before the uniform-step error below
+    check_block_transport(p, tb)
+    # Interim guard, removed by the task that builds the block rows
+    if tb.tech_length["transport"].notnull().any():
+        raise NotImplementedError(
+            "block transport technologies are not built yet"
+        )
 
     # The delay between injection and delivery is given in hours (default 0);
     # the flow is rolled by whole time steps, so it is converted to steps,
@@ -192,19 +201,7 @@ def add_transport(
     # study with one tech per resource gives each tech a resource on its own
     # links only, and on the others (no resource) nothing can flow, so none of
     # the flows, capacities and rows of the module is created there.
-    link_tech = xr.DataArray(
-        np.zeros((p.sizes["link"], p.sizes["transport_tech"])),
-        coords=[p.link, p.transport_tech],
-    )
-    pair_exists = xr.DataArray(
-        np.isin(
-            p.transport_resource.broadcast_like(link_tech)
-            .transpose("link", "transport_tech")
-            .values.astype(str),
-            p.resource.values.astype(str),
-        ),
-        coords=[p.link, p.transport_tech],
-    )
+    pair_exists = transport_pair_exists(p)
 
     # ------------
     # Variables

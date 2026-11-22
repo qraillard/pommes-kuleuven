@@ -506,3 +506,9 @@ def test_fixture_helper_names_a_parameter_that_is_not_a_conftest_fixture():
         _fixture("no_such_fixture")
     with pytest.raises(ValueError, match="sort_coords_and_vars"):  # imported by conftest, not a fixture
         _fixture("sort_coords_and_vars")
+
+
+def test_block_modules_has_transport():
+    assert "transport" in BLOCK_MODULES
+    assert block_prefix("transport", 24) == "operation_transport_block_24h_"
+    assert _BLOCK_NAME.match("operation_transport_block_24h_power")

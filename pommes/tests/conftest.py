@@ -1060,6 +1060,7 @@ def parameters(
                         "conversion_time_block_hrs": np.array(np.nan),
                         "combined_time_block_hrs": np.array(np.nan),
                         "resource_time_block_hrs": np.array(np.nan),
+                        "transport_time_block_hrs": np.array(np.nan),
                         "conversion_time_block_rule": np.array("min"),
                         **{
                             f"{name}_expected": np.array(False)
