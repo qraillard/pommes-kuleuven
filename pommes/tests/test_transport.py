@@ -5,6 +5,7 @@ from numpy.testing import assert_array_almost_equal as assert_equal_epsilon
 from numpy.testing import assert_array_equal as assert_equal
 
 from pommes.model.build_model import build_model
+from pommes.tests.time_blocks_helper import lp_text
 
 
 @pytest.fixture()
@@ -413,6 +414,16 @@ def test_transport_delay_moves_the_shortage(parameters_transport):
         shortage[label] = [bool(x > 1e-6) for x in shed]
     assert shortage["none"] == [False, True, False]
     assert shortage["1h"] == [False, False, True]
+
+
+def test_nan_delay_reads_as_zero(parameters_transport):
+    """An empty transport_delay is no delay: the same LP file, so what is withdrawn stays tied to what is injected."""
+    files = {}
+    for label, delay in (("zero", 0.0), ("nan", np.nan)):
+        p = _one_way_three_hours(parameters_transport, [1.0, 1.0, 1.0])
+        p["transport_delay"] = delay
+        files[label] = lp_text(build_model(p))
+    assert files["nan"] == files["zero"]
 
 
 def _one_way_setup(p):

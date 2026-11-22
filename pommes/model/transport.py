@@ -152,7 +152,8 @@ def add_transport(
           over the year like storage levels. Needs a uniform time step and a
           contiguous series of hours (not representative periods); not
           applied on links with linepack. The goods in transit are the
-          difference between what has left and what has arrived.
+          difference between what has left and what has arrived. An empty
+          value (NaN) reads as 0.
 
         These additions ensure that transport infrastructure operates within
         technical and economic limits, allowing the model to simulate energy
@@ -166,9 +167,11 @@ def add_transport(
     # the flow is rolled by whole time steps, so it is converted to steps,
     # which needs one step length.
     step = np.unique(p.time_step_duration.values)
-    if (p.transport_delay > 0).any() and step.size != 1:
+    # An empty delay is no delay: a NaN would match no delay value below and leave the two ends of the link untied.
+    delay = p.transport_delay.fillna(0)
+    if (delay > 0).any() and step.size != 1:
         raise ValueError("transport_delay needs a uniform time_step_duration")
-    delay_steps = np.round(p.transport_delay / step[0]).astype("int64")
+    delay_steps = np.round(delay / step[0]).astype("int64")
 
     # A (link, tech) pair exists where it carries a resource of the model: a
     # study with one tech per resource gives each tech a resource on its own
