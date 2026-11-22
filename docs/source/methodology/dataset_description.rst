@@ -687,6 +687,16 @@ Without these four parameters the model is exactly that of 0.6.1+kul. See the ti
       - ['link', 'transport_tech', 'year_op']
       - float64
 
+    * - transport_fuel_emission_factor
+      - 0.0
+      - ['link', 'transport_tech', 'year_op']
+      - float64
+
+    * - transport_fuel_total_emission_factor
+      - 0.0
+      - ['link', 'transport_tech', 'year_op']
+      - float64
+
     * - transport_fuel_area
       - nan
       - ['link', 'transport_tech']

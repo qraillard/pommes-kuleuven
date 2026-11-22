@@ -319,6 +319,14 @@ Transport Parameters
       - POMMES
       - Description
 
+    * - :math:`\varepsilon^{CO_2, fuel}_{y, l, \tau}`
+      - ``transport_fuel_emission_factor``
+      - :math:`\mathrm{CO_2}` emitted per MWh of fuel burnt by :math:`\tau` on link :math:`l` [t :math:`\mathrm{CO_2}/\text{MWh}`], seen by the carbon tax; counted in the arrival area. Leave at 0 if the supplier of the fuel already carries its emissions
+
+    * - :math:`\varepsilon^{CO_2, fuel, tot}_{y, l, \tau}`
+      - ``transport_fuel_total_emission_factor``
+      - Same, seen by the carbon goals (``operation_total_carbon_emissions``). Leave at 0 if the supplier of the fuel already carries its emissions
+
     * - :math:`\gamma_{y, r, t}`
       - ``TODO``
       - Importation cost of :math:`r` in :math:`y` at :math:`t` from ROW [€/MWh]

@@ -319,6 +319,28 @@ def add_carbon(
                 L,
             )
 
+    if "transport" in p.keys() and p.transport:
+        # Fuel burnt by the links (tCO2 per MWh of fuel), counted in the arrival area of the link at the injection step,
+        # whatever transport_fuel_area is. Each row gets its term only if a pair of the model burns fuel with a non-zero
+        # factor.
+        for row, name in (
+            (operation_carbon_emissions_def, "transport_fuel_emission_factor"),
+            (operation_total_carbon_emissions_def, "transport_fuel_total_emission_factor"),
+        ):
+            if name not in p:
+                continue
+            burnt = p.transport_fuel_consumption.fillna(0) * p[name].fillna(0)
+            if ((burnt != 0) & (v.operation_transport_power_capacity.labels >= 0)).any():
+                _add_emissions(
+                    [row],
+                    (v.operation_transport_power_in * burnt)
+                    .where(p.area == p.transport_area_to)
+                    .sum(["link", "transport_tech"]),
+                    tb,
+                    None,
+                    p.time_step_duration,
+                )
+
     # Costs - Carbon
 
     carbon_tax_area = xr.where(

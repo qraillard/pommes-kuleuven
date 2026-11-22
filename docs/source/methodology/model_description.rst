@@ -508,7 +508,23 @@ Equation :eq:`emission-def` defines the operation emission variable.
             \varepsilon^{\ce{CO2}}_{c} \, \mathbf P^{c}_{y, t, c, i}
         + \sum_{r}
             \varepsilon^{\ce{CO2}}_{y, r, t} \, I^{net}_{y, r, t}
+        + \sum_{l, \tau, a = a^{to}_{l, \tau}}
+            \varepsilon^{\ce{CO2}, fuel}_{y, l, \tau} \, \kappa_{y, l, \tau} \,
+            (\Delta T)_{t} \, \mathbf P^{in}_{y, t, l, \tau}
     \quad \forall \ y, t
+
+Transport. A transport technology :math:`\tau` on a link :math:`l` may burn fuel, :math:`\kappa` per MWh injected
+(``transport_fuel_consumption``, drawn at ``transport_fuel_area`` or at the departure area). The user chooses how its
+emissions are included, with two optional parameters in tCO2 per MWh of fuel burnt (default 0): ``transport_fuel_emission_factor``
+(:math:`\varepsilon^{\ce{CO2}, fuel}`, the last term above) enters the emissions that the carbon tax and the carbon tax
+groups see, ``transport_fuel_total_emission_factor`` enters the emissions that the carbon goals see (system, per area,
+groups of areas), through the same term with its own factor. A study may tax them, count them in the goals without taxing
+them (an area that taxes its direct emissions only), do both, or neither. They are counted in the arrival area of the
+link (``transport_area_to``), whatever ``transport_fuel_area`` is, at the step the fuel is burnt (the injection step,
+also with a ``transport_delay``). A term is added only where a (link, technology) pair that exists burns fuel with a
+non-zero factor, so without the parameters (or at 0, or NaN) the model is unchanged. If the supplier of the fuel already
+carries its emissions (an emission factor on the conversion that produces it, or on its import), leave these factors at
+0, or the emissions are counted twice.
 
 The total emission constraint is in equation :eq:`emission-max`.
 

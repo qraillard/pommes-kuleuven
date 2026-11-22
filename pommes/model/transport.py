@@ -144,8 +144,19 @@ def add_transport(
         - ``transport_fuel_consumption`` (link, transport_tech, year_op) and
           ``transport_fuel_resource`` (link, transport_tech): fuel drawn at
           the "from" end per unit injected, and the resource it is taken
-          from (e.g. the bunker fuel of a ship). Its emissions belong to
-          whatever conversion supplies that resource.
+          from (e.g. the bunker fuel of a ship).
+        - ``transport_fuel_emission_factor`` and
+          ``transport_fuel_total_emission_factor`` (link, transport_tech,
+          year_op): tCO2 per MWh of fuel burnt (default 0, NaN reads as 0),
+          the first for the emissions that the carbon tax sees, the second
+          for those of the carbon goals. The emissions of the fuel burnt
+          (factor x power injected x consumption x time step) are counted by
+          the carbon module in the arrival area of the link
+          (``transport_area_to``), whatever ``transport_fuel_area`` is, at the
+          step the fuel is burnt (the injection step, also with a delay). If
+          the supplier of the fuel already carries its emissions (an emission
+          factor on the conversion that produces it, or on its import), leave
+          these factors at 0, or they are counted twice.
         - ``transport_delay`` (link, transport_tech): hours between injection
           at the "from" end and delivery at the "to" end (loading, voyage,
           unloading): what arrives at hour h left at hour h - delay, cyclic

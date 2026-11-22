@@ -963,6 +963,8 @@ def transport(coords):
             transport_delay=np.array(0.0, dtype="float64"),
             transport_efficiency=np.array(1.0, dtype="float64"),
             transport_fuel_consumption=np.array(np.nan, dtype="float64"),
+            transport_fuel_emission_factor=np.array(0.0, dtype="float64"),
+            transport_fuel_total_emission_factor=np.array(0.0, dtype="float64"),
             transport_fuel_resource=np.array(np.nan, dtype=str),
             transport_fuel_area=np.array(np.nan, dtype=str),
             transport_hurdle_costs=np.array(0.01, dtype="float64"),

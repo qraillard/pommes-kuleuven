@@ -904,6 +904,22 @@ transport_fuel_consumption:
   - transport_tech
   - year_op
   type: float64
+transport_fuel_emission_factor:
+  default: 0.0
+  index_set:
+  - link
+  - transport_tech
+  - year_op
+  type: float64
+  description: "Emissions of the fuel burnt by the link [tCO2 per MWh of fuel burnt] that the carbon tax and the carbon tax groups see (operation_carbon_emissions). Counted in the arrival area of the link (transport_area_to), whatever transport_fuel_area is, at the step the fuel is burnt. NaN reads as 0. Leave it at 0 if the supplier of the fuel already carries the emissions (an emission factor on the conversion that produces it, or on its import): they would be counted twice."
+transport_fuel_total_emission_factor:
+  default: 0.0
+  index_set:
+  - link
+  - transport_tech
+  - year_op
+  type: float64
+  description: "Emissions of the fuel burnt by the link [tCO2 per MWh of fuel burnt] that the carbon goals see (operation_total_carbon_emissions: system, per area, groups of areas). Counted in the arrival area of the link (transport_area_to), whatever transport_fuel_area is, at the step the fuel is burnt. NaN reads as 0. Leave it at 0 if the supplier of the fuel already carries the emissions (an emission factor on the conversion that produces it, or on its import): they would be counted twice."
 transport_fuel_area:
   default: nan
   index_set:
