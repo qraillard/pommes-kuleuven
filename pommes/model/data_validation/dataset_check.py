@@ -13,6 +13,8 @@ from pommes.utils import (
     check_block_daily_cap,
     check_block_flexdem,
     check_block_transport,
+    check_transport_modes,
+    check_transport_single_resource,
     has_operating_conditions,
     time_blocks,
 )
@@ -178,12 +180,19 @@ def _check_expected_flags(ds: Dataset) -> None:
 
 
 def check_time_blocks(ds: Dataset) -> None:
-    """Refuse bad block inputs (R1-R6, R8-R10), warnings silenced."""
+    """
+    Refuse bad block inputs (R1-R6, R8-R18), warnings of the blocks silenced.
+
+    After the blocks, the transport checks run in the order M4: a technology with several resources, the modes (R18,
+    R16, R17, R15, R13, R14, then the warning W1), then R11 and R12 of the block technologies.
+    """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         tb = time_blocks(ds)
     check_block_daily_cap(ds, tb)
     check_block_flexdem(ds, tb)
+    check_transport_single_resource(ds)
+    check_transport_modes(ds, tb)
     check_block_transport(ds, tb)
 
 

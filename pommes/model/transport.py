@@ -15,11 +15,14 @@ from pommes.utils import (
     check_block_transport,
     check_group_coord,
     check_partition,
+    check_transport_modes,
+    check_transport_single_resource,
     condition_coords,
     condition_mask,
     expected_over_conditions,
     time_blocks,
     transport_block_availability,
+    transport_modal,
     transport_pair_exists,
 )
 
@@ -581,8 +584,13 @@ def add_transport(
     tb = time_blocks(model_parameters) if tb is None else tb
     m = model
     p = model_parameters
-    # R11, R12 on the full dataset, before the uniform-step error below
+    # Single resource, then R18, R16, R17, R15, R13, R14 and W1 (modes), then R11, R12: on the full dataset, before the
+    # uniform-step error below
+    check_transport_single_resource(p)
+    check_transport_modes(p, tb)
     check_block_transport(p, tb)
+    if transport_modal(p) is not None:  # interim, until the modal statements are built
+        raise NotImplementedError("transport technologies with modes are not built yet")
 
     # The delay between injection and delivery is given in hours (default 0);
     # the flow is rolled by whole time steps, so it is converted to steps,

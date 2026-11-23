@@ -5,6 +5,7 @@ from numpy.testing import assert_array_almost_equal as assert_equal_epsilon
 from numpy.testing import assert_array_equal as assert_equal
 
 from pommes.model.build_model import build_model
+from pommes.model.data_validation.dataset_check import check_inputs
 from pommes.tests.time_blocks_helper import lp_text
 
 
@@ -537,3 +538,18 @@ def test_transport_fuel_drawn_from_another_resource(parameters_transport):
     shed = s.operation_load_shedding_power.sel(resource="methane")
     assert_equal_epsilon(shed.sel(area="area_1").to_numpy(), np.array(1))
     assert_equal_epsilon(shed.sel(area="area_2").to_numpy(), np.array(0))
+
+
+def test_single_resource_refusal_in_d(parameters_transport):
+    """A technology that carries two resources on two links is refused, as in the sparse engine (it used to build a wrong LP)."""
+    p = parameters_transport.copy(deep=True)
+    resource = xr.DataArray(
+        np.array([["methane", "methane", "electricity"]] * p.sizes["link"], dtype=str),
+        coords=[p.link, p.transport_tech],
+    ).copy()
+    resource.loc[dict(link="link_2", transport_tech=p.transport_tech.values[0])] = "electricity"
+    p["transport_resource"] = resource
+    with pytest.raises(ValueError, match="single resource"):
+        check_inputs(p.copy(deep=True))
+    with pytest.raises(ValueError, match="single resource"):
+        build_model(p)

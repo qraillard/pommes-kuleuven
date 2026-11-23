@@ -2052,3 +2052,143 @@ def net_import_expected_conditions_dataset() -> xr.Dataset:
     return p.assign(
         net_import_max_yearly_energy_import_expected=np.array(True), net_import_max_yearly_energy_export_expected=np.array(True)
     )
+
+
+# --- Transport technologies with modes ---
+
+BLEND = {"blend": {"ch4": 0.90, "h2": 0.10}, "methane": {"ch4": 1.0}}
+LEAN = {"lean": {"ch4": 0.90, "h2": 0.03}}
+PURE = {"hydrogen": {"h2": 1.0}, "methane": {"ch4": 1.0}}
+
+
+def with_modes(p, modes: dict, order: list[str] | None = None, ramp: dict | None = None) -> xr.Dataset:
+    """
+    ``p`` with the coordinate ``transport_mode``, the table ``transport_mode_factor`` and, with ``ramp``, the two ramps.
+
+    ``modes`` is ``{tech: {mode: {resource: factor}}}``; a technology that is not in it has no mode (factor 0). The
+    coordinate is ``order`` or else the modes in the order they are first seen. ``ramp`` is ``{tech: (up, down)}``,
+    on every link and operation year of the technology (NaN elsewhere).
+    """
+    seen = list(dict.fromkeys(m for table in modes.values() for m in table))
+    labels = seen if order is None else list(order)
+    assert set(seen) <= set(labels), (seen, labels)
+    techs, resources = list(p.transport_tech.values), list(p.resource.values)
+    factor = np.zeros((len(techs), len(labels), len(resources)))
+    for tech, table in modes.items():
+        for mode, shares in table.items():
+            for resource, value in shares.items():
+                factor[techs.index(tech), labels.index(mode), resources.index(resource)] = value
+    p = p.assign_coords(transport_mode=labels)
+    p["transport_mode_factor"] = (("transport_tech", "transport_mode", "resource"), factor)
+    for name, k in (("transport_mode_ramp_up", 0), ("transport_mode_ramp_down", 1)):
+        if ramp is not None:
+            values = np.full((p.sizes["link"], len(techs), p.sizes["year_op"]), np.nan)
+            for tech, pair in ramp.items():
+                values[:, techs.index(tech), :] = pair[k]
+            p[name] = (("link", "transport_tech", "year_op"), values)
+    return p
+
+
+def as_modal(p, techs: list[str]) -> xr.Dataset:
+    """``p`` with the technologies ``techs`` modal, one mode ``only`` with the factor 1 on their ``transport_resource`` (6.1)."""
+    modes = {}
+    for tech in techs:
+        carried = [r for r in np.unique(p.transport_resource.sel(transport_tech=tech).values.astype(str)) if r in p.resource.values]
+        assert len(carried) == 1, (tech, carried)
+        modes[tech] = {"only": {carried[0]: 1.0}}
+    return with_modes(p, modes)
+
+
+def transport_modes_toy(dt=(1.0, 1.0), **kw) -> xr.Dataset:
+    """
+    The hand toy of section 6.3: a pipe from ``a`` to ``b`` that can carry ``ch4`` and ``h2``, heat to make at ``b``.
+
+    Areas ``a`` and ``b``, one link ``ab``, resources ``idle``, ``h2``, ``ch4``, ``heat``, one year. ``electrolyser``
+    makes ``h2`` at 1 EUR/MWh and ``well`` makes ``ch4`` at 5 EUR/MWh, both at ``a`` only; ``boiler_h2`` and
+    ``boiler_ch4`` make heat from them 1 to 1 at no cost, at ``b`` only. Every conversion capacity is pinned
+    (min = max = 20 where the technology lives, 0 elsewhere), so that S masks units. The heat demand at ``b`` is
+    ``demand`` MW times the step; spillage costs 100; no fixed, invest or hurdle cost. The pipe carries ``ch4`` as
+    ``transport_resource`` and its capacity is pinned to ``capacity``. ``operation_year_duration`` is ``sum(dt)``.
+
+    Keywords: ``modes`` (a mode table of the pipe, as ``BLEND``; ``{tech: table}`` when there are several ``techs``;
+    default None: the plain pipe), ``order`` (the coordinate), ``techs`` (default ``("pipe",)``, all on ``ab``),
+    ``eta`` (efficiency), ``capacity`` (MW), ``availability`` (of the electrolyser, per hour), ``ramp`` ((up, down) of
+    the mode ramp, for every modal technology), ``shed`` (heat shedding at 100), ``demand`` (MW of heat per step).
+    """
+    from pommes.model.data_validation import ref_inputs
+
+    modes, order, ramp = kw.pop("modes", None), kw.pop("order", None), kw.pop("ramp", None)
+    techs = list(kw.pop("techs", ("pipe",)))
+    eta, capacity, availability = kw.pop("eta", 1.0), kw.pop("capacity", 20.0), kw.pop("availability", None)
+    shed, demand = kw.pop("shed", False), kw.pop("demand", 10.0)
+    assert not kw, kw
+    dt = np.array(dt, dtype="float64")
+    n, k = len(dt), len(techs)
+    resources = ["idle", "h2", "ch4", "heat"]
+    ds = xr.Dataset(
+        coords=dict(
+            area=["a", "b"],
+            hour=np.arange(n, dtype="int64"),
+            resource=resources,
+            conversion_tech=["electrolyser", "well", "boiler_h2", "boiler_ch4"],
+            transport_tech=techs,
+            link=["ab"],
+            year_dec=np.array([2040]),
+            year_inv=np.array([2020]),
+            year_op=np.array([2030], dtype="int64"),
+        )
+    )
+    ds["conversion"] = True
+    ds["transport"] = True
+    ds["time_step_duration"] = ("hour", dt)
+    ds["operation_year_duration"] = ("year_op", [float(dt.sum())])
+    ds["operation_day_duration"] = np.array(24, dtype="int64")
+    ds["discount_rate"] = ("year_op", [0.0])
+    ds["discount_factor"] = ("year_op", [1.0])
+    heat = np.zeros((2, n, 4, 1))
+    heat[1, :, 3, 0] = demand * dt
+    ds["demand"] = (("area", "hour", "resource", "year_op"), heat)
+    ds["load_shedding_max_capacity"] = ("resource", [0.0, 0.0, 0.0, np.nan if shed else 0.0])
+    ds["load_shedding_cost"] = ("resource", [0.0, 0.0, 0.0, 100.0])
+    ds["spillage_max_capacity"] = ("resource", [np.nan] * 4)
+    ds["spillage_cost"] = ("resource", [100.0] * 4)
+    ds["conversion_factor"] = (
+        ("conversion_tech", "resource"),
+        [[0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, -1.0, 0.0, 1.0], [0.0, 0.0, -1.0, 1.0]],
+    )
+    ds["conversion_variable_cost"] = ("conversion_tech", [1.0, 5.0, 0.0, 0.0])
+    ds["conversion_fixed_cost"] = ("conversion_tech", [0.0] * 4)
+    ds["conversion_invest_cost"] = ("conversion_tech", [0.0] * 4)
+    ds["conversion_emission_factor"] = ("conversion_tech", [0.0] * 4)
+    pinned = [[20.0, 20.0, 0.0, 0.0], [0.0, 0.0, 20.0, 20.0]]  # a: the producers; b: the boilers
+    ds["conversion_power_capacity_max"] = (("area", "conversion_tech"), pinned)
+    ds["conversion_power_capacity_min"] = (("area", "conversion_tech"), pinned)
+    ds["conversion_life_span"] = ("conversion_tech", [20.0] * 4)
+    ds["conversion_end_of_life"] = (("conversion_tech", "year_inv"), [[2040.0]] * 4)
+    ds["conversion_annuity_cost"] = (("conversion_tech", "year_dec", "year_inv"), np.zeros((4, 1, 1)))
+    ds["conversion_early_decommissioning"] = np.array(False)
+    ds["annuity_full_life"] = np.array(False)
+    if availability is not None:
+        values = np.full((2, 4, n, 1), np.nan)
+        values[:, 0, :, 0] = np.asarray(availability, dtype="float64")
+        ds["conversion_availability"] = (("area", "conversion_tech", "hour", "year_op"), values)
+    ds["transport_area_from"] = (("link", "transport_tech"), np.full((1, k), "a"))
+    ds["transport_area_to"] = (("link", "transport_tech"), np.full((1, k), "b"))
+    ds["transport_resource"] = (("link", "transport_tech"), np.full((1, k), "ch4"))
+    for name in ("transport_fixed_cost", "transport_hurdle_costs"):
+        ds[name] = (("link", "transport_tech", "year_op"), np.zeros((1, k, 1)))
+    ds["transport_power_capacity_min"] = (("link", "transport_tech", "year_op"), np.full((1, k, 1), float(capacity)))
+    ds["transport_power_capacity_max"] = (("link", "transport_tech", "year_op"), np.full((1, k, 1), float(capacity)))
+    if eta != 1.0:
+        ds["transport_efficiency"] = (("link", "transport_tech", "year_op"), np.full((1, k, 1), float(eta)))
+    ds["transport_life_span"] = (("link", "transport_tech", "year_inv"), np.full((1, k, 1), 20.0))
+    ds["transport_end_of_life"] = (("link", "transport_tech", "year_inv"), np.full((1, k, 1), 2040))
+    ds["transport_annuity_cost"] = (("link", "transport_tech", "year_dec", "year_inv"), np.zeros((1, k, 1, 1)))
+    ds["transport_early_decommissioning"] = np.array(False)
+    if modes is not None:
+        modes = {techs[0]: modes} if k == 1 else modes
+        ds = with_modes(ds, modes, order, None if ramp is None else {t: ramp for t in modes})
+    for name, spec in ref_inputs.items():
+        if name not in ds.variables:
+            ds[name] = np.array(spec["default"], dtype=spec["type"])
+    return ds

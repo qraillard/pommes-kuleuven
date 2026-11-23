@@ -6,6 +6,7 @@ import os
 import re
 import warnings
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -754,6 +755,11 @@ def _contributors(p: Dataset, tech_length: dict) -> dict:
                     fuel = fuel & False
                 by_res = by_res | fuel
             hit[:, j] = _hits(by_res, "transport_tech", (techs, None))
+        modal = transport_modal(p)
+        if modal is not None:
+            carried = modal.carried.transpose("transport_tech", "resource").values
+            # hourly technologies only: a modal block technology (R15) keeps its 0.8.0 contributions
+            hit |= carried & np.isnan(tech_length["transport"].values)[:, None]
         add(
             "transport tech",
             "transport_tech",
@@ -1018,6 +1024,184 @@ def check_block_transport(p: Dataset, tb: TimeBlocks) -> None:
                 f"{tech}: {what} on link {links[j]}: a block transport "
                 f"technology ({int(L)} h) takes no {refused}."
             )
+
+
+# --- Transport technologies with modes ---
+
+TRANSPORT_MODE = "transport_mode"
+NO_MODE_COORD_MESSAGE = "transport_mode is a dimension without a coordinate: call assign_coords(transport_mode=[...]) first."
+_MODE_DIMS = ("transport_tech", TRANSPORT_MODE, "resource")
+
+
+def has_transport_modes(p: Dataset) -> bool:
+    """
+    Whether the dataset carries the transport_mode coordinate.
+
+    Raises:
+        ValueError: If transport_mode is a dimension without a coordinate
+            (R18: the modes would be read as 0, 1, 2).
+    """
+    if TRANSPORT_MODE in p.dims and TRANSPORT_MODE not in p.coords:
+        raise ValueError(NO_MODE_COORD_MESSAGE)
+    return TRANSPORT_MODE in p.coords
+
+
+class TransportModes(NamedTuple):
+    """The modes of the transport technologies, see ``transport_modal``."""
+
+    factor: DataArray  # float64 (transport_tech, transport_mode, resource), dataset order, NaN as 0
+    defined: DataArray  # bool (transport_tech, transport_mode): some factor > 0
+    carried: DataArray  # bool (transport_tech, resource): some mode has a factor > 0
+    modal: DataArray  # bool (transport_tech): some mode is defined
+    techs: pd.Index  # the modal technologies, model order
+    modes: pd.Index  # the whole coordinate, in the order of the dataset
+
+
+def _mode_factor(p: Dataset) -> DataArray:
+    """``transport_mode_factor`` on ``_MODE_DIMS`` by label (a missing dimension is broadcast), NaN kept."""
+    da = p["transport_mode_factor"]
+    if set(da.dims) - set(_MODE_DIMS):
+        raise ValueError(
+            "transport_mode_factor: only the transport_tech, transport_mode and resource coordinates are allowed"
+        )
+    for dim in _MODE_DIMS:
+        da = da.reindex({dim: p[dim].values}) if dim in da.dims else da.expand_dims({dim: p[dim].values})
+    return da.transpose(*_MODE_DIMS).astype("float64")
+
+
+def transport_modal(p: Dataset) -> TransportModes | None:
+    """
+    The modes of the transport technologies of ``p`` (pure function), or None when no technology is modal.
+
+    None unless ``transport`` is on, the coordinate ``transport_mode`` is present, ``transport_mode_factor`` is in
+    ``p`` and some technology is modal. A mode is defined for a technology when one of its factors is > 0 (NaN reads
+    as 0); a technology is modal when it has a defined mode. ``p`` may be a group (a subset of technologies): the
+    factor is read by label.
+
+    Raises:
+        ValueError: R18 (see ``has_transport_modes``), or a factor with another dimension than transport_tech,
+            transport_mode and resource.
+    """
+    if not (_on(p, "transport") and has_transport_modes(p) and "transport_mode_factor" in p):
+        return None
+    factor = _mode_factor(p).fillna(0.0)
+    positive = factor > 0
+    defined, carried = positive.any("resource"), positive.any(TRANSPORT_MODE)
+    modal = defined.any(TRANSPORT_MODE)
+    if not modal.any():
+        return None
+    return TransportModes(
+        factor,
+        defined,
+        carried,
+        modal,
+        pd.Index(p.transport_tech.values[modal.values], name="transport_tech"),
+        pd.Index(p[TRANSPORT_MODE].values, name=TRANSPORT_MODE),
+    )
+
+
+def check_transport_single_resource(p: Dataset) -> None:
+    """A transport technology carries a single resource on all its links (the same test in both engines)."""
+    if not _on(p, "transport") or "transport_resource" not in p:
+        return
+    link_tech = xr.DataArray(
+        np.zeros((p.sizes["link"], p.sizes["transport_tech"])),
+        coords=[p.link, p.transport_tech],
+    )
+    resource_match = np.equal(p.transport_resource.broadcast_like(link_tech), p.resource)
+    carries = resource_match.any([d for d in resource_match.dims if d not in ("transport_tech", "resource")])
+    if (carries.sum("resource") > 1).any():
+        raise ValueError("a transport tech must carry a single resource on all its links")
+
+
+def _first_bad(bad) -> tuple[int, int] | None:
+    """(technology, link) of the first True of ``bad`` (link, technology): first technology, then its first link."""
+    techs = np.flatnonzero(bad.any(axis=0))
+    return (int(techs[0]), int(np.flatnonzero(bad[:, techs[0]])[0])) if techs.size else None
+
+
+def check_transport_modes(p: Dataset, tb: TimeBlocks) -> None:
+    """
+    R18, R16, R17, R15, R13, R14 (refusals) and W1 (a warning) of the transport technologies with modes.
+
+    Nothing without ``transport``, ``transport_resource`` or the coordinate ``transport_mode``. A technology is
+    modal after R16 (NaN reads as 0); R17, R13 and R14 look at the existing pairs only.
+    """
+    if not _on(p, "transport") or "transport_resource" not in p:
+        return
+    if not has_transport_modes(p) or "transport_mode_factor" not in p:  # R18 raised by has_transport_modes
+        return
+    f = _mode_factor(p)
+    negative_or_infinite = (f < 0) | np.isinf(f)
+    if negative_or_infinite.any():
+        i, j, k = np.argwhere(negative_or_infinite.values)[0]
+        raise ValueError(
+            f"{p.transport_tech.values[i]}: transport_mode_factor[{p[TRANSPORT_MODE].values[j]}, "
+            f"{p.resource.values[k]}] = {float(f.values[i, j, k])}: a factor is finite and >= 0 (NaN reads as 0)."
+        )
+    modal = transport_modal(p)
+    if modal is None:
+        return
+    techs, links = p.transport_tech.values, p.link.values
+    is_modal = modal.modal.values
+    exists = transport_pair_exists(p)
+    grid = xr.zeros_like(exists, dtype="float64")
+    # R17: the resource of an existing pair has a positive factor in some mode
+    resource = p.transport_resource.broadcast_like(grid).transpose("link", "transport_tech").values.astype(str)
+    position = pd.Index(p.resource.values.astype(str)).get_indexer(resource.ravel()).reshape(resource.shape)
+    has_factor = modal.carried.values[np.arange(len(techs))[None, :], position.clip(0)]
+    bad = exists.values & is_modal[None, :] & ~has_factor
+    if (first := _first_bad(bad)) is not None:
+        i, j = first
+        raise ValueError(
+            f"{techs[i]}: transport_resource {resource[j, i]} on link {links[j]} has no positive "
+            f"transport_mode_factor in any mode."
+        )
+    # R15: a block length
+    length = tb.tech_length["transport"].values
+    if (is_modal & np.isfinite(length)).any():
+        i = int(np.flatnonzero(is_modal & np.isfinite(length))[0])
+        raise ValueError(
+            f"{techs[i]}: transport_time_block_hrs = {int(length[i])} h: a transport technology with modes "
+            f"cannot be a block technology."
+        )
+    # R13, R14: no delay and no linepack on an existing pair
+    delay = (
+        p.transport_delay.fillna(0).broadcast_like(grid).transpose("link", "transport_tech").values
+        if "transport_delay" in p
+        else np.zeros(exists.shape)
+    )
+    bad = exists.values & is_modal[None, :] & (delay != 0)
+    if (first := _first_bad(bad)) is not None:
+        i, j = first
+        raise ValueError(
+            f"{techs[i]}: transport_delay = {float(delay[j, i])} h on link {links[j]}: a transport technology "
+            f"with modes takes no delay."
+        )
+    finite = np.zeros(exists.shape, dtype=bool)
+    if "transport_linepack_capacity" in p:
+        finite = np.isfinite(p.transport_linepack_capacity)
+        finite = finite.any([d for d in finite.dims if d not in ("link", "transport_tech")])
+        finite = finite.broadcast_like(grid).transpose("link", "transport_tech").values
+    bad = exists.values & is_modal[None, :] & finite
+    if (first := _first_bad(bad)) is not None:
+        i, j = first
+        raise ValueError(
+            f"{techs[i]}: transport_linepack_capacity is finite on link {links[j]}: a transport technology "
+            f"with modes takes no linepack."
+        )
+    # W1: a defined mode whose factors do not sum to 1
+    total = modal.factor.sum("resource").values
+    off = modal.defined.values & (np.abs(total - 1) > 1e-9)
+    if off.any():
+        listed = "; ".join(
+            f"{techs[i]} {modal.modes[j]}: {total[i, j]:g}" for i, j in np.argwhere(off)
+        )
+        warnings.warn(
+            f"Transport modes whose factors do not sum to 1: {listed}. A flow of 1 MWh in such a mode carries "
+            f"that many MWh of resources.",
+            UserWarning,
+        )
 
 
 def check_block_flexdem(p: Dataset, tb: TimeBlocks) -> None:

@@ -1061,6 +1061,10 @@ def parameters(
                         "combined_time_block_hrs": np.array(np.nan),
                         "resource_time_block_hrs": np.array(np.nan),
                         "transport_time_block_hrs": np.array(np.nan),
+                        # transport modes
+                        "transport_mode_factor": np.array(0.0, dtype="float64"),
+                        "transport_mode_ramp_up": np.array(np.nan, dtype="float64"),
+                        "transport_mode_ramp_down": np.array(np.nan, dtype="float64"),
                         "conversion_time_block_rule": np.array("min"),
                         **{
                             f"{name}_expected": np.array(False)

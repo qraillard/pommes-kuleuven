@@ -962,6 +962,30 @@ transport_ramp_up:
   - transport_tech
   - year_op
   type: float64
+transport_mode_factor:
+  default: 0.0
+  index_set:
+  - transport_tech
+  - transport_mode
+  - resource
+  type: float64
+  description: "Transport technologies with modes. MWh of resource that leave the 'from' area per MWh of injected flow of the technology in the mode (NaN reads as 0, values >= 0); the 'to' area receives transport_efficiency times that. A mode is defined for a technology when one of its factors is > 0, and a technology is modal when it has a defined mode. The capacity, the availability and the hurdle cost stay on the flow, shared by the modes. Needs the coordinate transport_mode."
+transport_mode_ramp_up:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - year_op
+  type: float64
+  description: "Largest rise per hour, as a fraction of the capacity, of the difference between the flows of two modes of a modal technology (the first mode minus the second one in the order of the coordinate transport_mode). NaN: no constraint."
+transport_mode_ramp_down:
+  default: nan
+  index_set:
+  - link
+  - transport_tech
+  - year_op
+  type: float64
+  description: "Largest fall per hour, as a fraction of the capacity, of the difference between the flows of two modes of a modal technology (the first mode minus the second one in the order of the coordinate transport_mode). NaN: no constraint."
 
 turpe:
   default: 0
