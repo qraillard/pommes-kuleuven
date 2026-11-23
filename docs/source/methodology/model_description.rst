@@ -767,7 +767,7 @@ Refused inputs
 
 A delay or a linepack on a pair that does not exist (it carries no resource), a delay on an hourly transport technology
 and a block length on a technology with no existing pair are not refused. R4 names the transport technology
-(``transport tech {name}``). R5 and R10 also apply to balances that are coarse only because of block transport
+(``transport tech {name}``). R5, R9 and R10 also apply to balances that are coarse only because of block transport
 technologies.
 
 Must-run on blocks is never refused. A length longer than the horizon gives one block.
@@ -832,9 +832,11 @@ use it, including the block load shedding and spillage and the block transport t
 reads ``module_hourly(s, "transport", "net_generation", p)``; a user who sets a transport length reads the powers with
 ``module_hourly(s, "transport", "power", p)``, the hourly variable ``operation_transport_power`` holding only the
 technologies without a length). The outer-join ``UserWarning`` of ``model.solution`` then also arises on
-``transport_tech``. The dual of ``operation_transport_block_{L}h_power_max_constraint`` is one value per link,
-technology, block and year, in EUR per MW of the power of the block: it is the sum of the dual of the equivalent hourly
-rows over the block, not an hourly price, so it is not expanded to the steps. ``module_hourly``, and so ``get_net_generation`` and
+``transport_tech``. In a block model ``get_net_generation`` does not list a technology that has no existing pair. The
+dual of ``operation_transport_block_{L}h_power_max_constraint`` is one value per link,
+technology, block and year, in EUR per MW of the power of the block: it is the sum of the flat twin's hourly duals over the
+block (with one binding hour, the dual of that hour), in EUR per MW of the block's power, and it is not an hourly
+price, so it is not expanded to the steps. ``module_hourly``, and so ``get_net_generation`` and
 ``plot_power`` on block models, take a dense solution: a solution of the sparse engine (pommes-kul) must be densified
 first.
 

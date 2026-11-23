@@ -1032,6 +1032,11 @@ def transport_t2_ramps_short_last_block_dataset() -> xr.Dataset:
     return with_blocks(p, transport={"S": 8})
 
 
+def transport_all_block_dataset() -> xr.Dataset:
+    """The ship ``S`` alone, on 24 h blocks: the model has no hourly transport variable."""
+    return with_blocks(_transport_t2([1.0] * 48, {"S": 3.0}, techs=("S",)), transport={"S": 24})
+
+
 def transport_hand_toy() -> xr.Dataset:
     """
     T3(a): an all-block model by hand (no hourly transport technology), two days of 24 steps of 1 h.

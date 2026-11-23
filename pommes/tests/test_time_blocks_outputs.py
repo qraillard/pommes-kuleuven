@@ -21,6 +21,7 @@ from pommes.post_process import get_net_generation, module_hourly
 from pommes.tests.time_blocks_helper import (
     BLOCK_PARAMETERS,
     KILNS,
+    _transport_t2,
     combined_all_block_dataset,
     combined_derived_coarse_dataset,
     combined_t2_dataset,
@@ -32,10 +33,10 @@ from pommes.tests.time_blocks_helper import (
     hand_toy_b,
     net_import_two_lengths,
     solve_model,
-    transport_t2_availability_dataset,
+    transport_all_block_dataset,
     transport_hand_toy,
+    transport_t2_availability_dataset,
     transport_t2_two_lengths_dataset,
-    _transport_t2,
     with_blocks,
 )
 from pommes.utils import expand_to_hours, time_blocks
@@ -373,13 +374,8 @@ def test_outer_join_warning_is_filtered(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _all_block_transport() -> xr.Dataset:
-    """The ship ``S`` alone, on 24 h blocks: the model has no hourly transport variable."""
-    return with_blocks(_transport_t2([1.0] * 48, {"S": 3.0}, techs=("S",)), transport={"S": 24})
-
-
 def test_get_net_generation_with_an_all_block_transport():
-    p = _all_block_transport()
+    p = transport_all_block_dataset()
     m, twin, s, s_twin = solve_pair(p, transport={"S": 24})
     assert "operation_transport_net_generation" not in s and "operation_transport_block_24h_net_generation" in s
     net = get_net_generation(s, p)
