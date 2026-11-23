@@ -538,8 +538,8 @@ def _live_cells(var, dims):
 
 
 def _modal_flow_dataset():
-    """Techs pipe (blend, methane), pipe2 (methane, lean; no pair on link ba), plain (no mode); links ab and ba."""
-    own = {"methane": {"ch4": 1.0}, "lean": {"ch4": 0.9, "h2": 0.03}}
+    """Techs pipe (blend, methane), pipe2 (methane, lean, ch4 only; no pair on link ba), plain (no mode); links ab and ba."""
+    own = {"methane": {"ch4": 1.0}, "lean": {"ch4": 0.9}}  # pipe2 carries ch4 only
     p = transport_modes_toy(techs=("pipe", "pipe2", "plain"), modes={"pipe": BLEND, "pipe2": own}, order=["blend", "methane", "lean"])
     p = _with_links(p, order=("ab", "ba"))
     resource = p.transport_resource.copy()
