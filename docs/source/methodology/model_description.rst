@@ -633,7 +633,8 @@ Parameters (all ``nan`` by default): ``conversion_time_block_hrs``, ``combined_t
 the availability becomes a block value). None of them has an ``area``, ``year_op``, ``operating_condition`` or ``hour``
 coordinate: the block structure is shared by the areas, years and conditions, and all the links of a transport
 technology share its length. A transport technology has no rule parameter: its availability is always aggregated by
-the minimum. A length on a transport technology is ignored when the ``transport`` flag is off.
+the minimum. A valid length on a transport technology is ignored when the ``transport`` flag is off (its value
+and its coordinates are checked all the same).
 
 Blocks and anchoring
 --------------------
@@ -820,7 +821,7 @@ equality forcing the power to be constant inside each block.
       - refused (R11, R12)
     * - Carbon of block technologies
       - exact against the flat twin, step by step (the fuel emissions of a block transport technology are spread over the
-        hours of each block, as its flow is)
+        hours of each block, as its flow is, under the same condition of an efficiency above 0)
 
 Outputs
 -------
