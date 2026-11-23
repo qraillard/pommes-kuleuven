@@ -115,3 +115,29 @@ def test_t0_contributors_without_modal_technology():
     assert _contributor_table(with_zero, tb_zero) == _contributor_table(plain, tb)
     assert tb_zero.resource_length.equals(tb.resource_length)
     assert all(tb_zero.tech_length[k].equals(tb.tech_length[k]) for k in tb.tech_length)
+
+
+def test_modal_names_order():
+    """The transport names: the hourly ones, the modal ones with the ramps, then the block ones (section 8.1)."""
+    import xarray as xr
+
+    from pommes.tests.time_blocks_helper import transport_every_row_dataset, with_blocks, with_modes
+
+    p = transport_every_row_dataset()
+    ship = p.sel(transport_tech=["power_line"]).assign_coords(transport_tech=["ship"])
+    q = xr.concat([p, ship], dim="transport_tech", data_vars="minimal", coords="minimal", compat="override")
+    for name, fill in (("transport_delay", 0.0), ("transport_linepack_capacity", np.nan), ("transport_ramp_up", np.nan), ("transport_ramp_down", np.nan)):
+        q[name] = q[name].where(q.transport_tech != "ship", fill)
+    # power_line has no delay and no linepack: it is the modal technology; the ship is on 2 h blocks
+    modes = {"power_line": {"a": {"electricity": 1.0}, "b": {"electricity": 1.0}}}
+    q = with_modes(q, modes, ramp={"power_line": (0.5, 0.5)})
+    names = [n for n in build_model(with_blocks(q, transport={"ship": 2})).constraints if "transport" in n]
+    modal = [
+        "operation_transport_mode_power_in_def",
+        "operation_transport_mode_net_generation_def",
+        "operation_transport_mode_ramp_up_constraint_0_1",
+        "operation_transport_mode_ramp_down_constraint_0_1",
+    ]
+    blocks = [n for n in names if n.startswith("operation_transport_block_")]
+    assert blocks
+    assert names == HOURLY_TRANSPORT_ORDER + modal + blocks

@@ -1,5 +1,7 @@
 """Module related to inter-zone resource transport."""
 
+import itertools
+
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -469,10 +471,26 @@ def _add_modal(m, p, tb, modal, capacity, power_in, net_generation) -> None:
         mask=condition_mask(p, sel(modal.carried)),
     )
     check_group_coord(con, techs, "transport_tech")
-    # interim, until the ramp on mode change is built (Task 3)
-    for name in ("transport_mode_ramp_up", "transport_mode_ramp_down"):
-        if name in q and np.isfinite(q[name]).any():
-            raise NotImplementedError("the ramp on mode change is not built yet")
+    # ramp on mode change (E3, E4): positions of the modes, as the dataset gives them
+    first = p.hour != p.hour[0]
+    cap = sel(capacity)
+    for i, j in itertools.combinations(range(modes.size), 2):
+        d = flow.isel(transport_mode=i, drop=True) - flow.isel(transport_mode=j, drop=True)
+        both = sel(modal.defined).isel(transport_mode=i, drop=True) & sel(modal.defined).isel(transport_mode=j, drop=True)
+        for way, rho, change in (
+            ("up", "transport_mode_ramp_up", d - d.shift(hour=1)),
+            ("down", "transport_mode_ramp_down", d.shift(hour=1) - d),
+        ):
+            if rho not in q:
+                continue
+            live = np.isfinite(q[rho]) * first * pair * both
+            if live.any():
+                con = m.add_constraints(
+                    change / p.time_step_duration - q[rho] * cap <= 0,
+                    name=f"operation_transport_mode_ramp_{way}_constraint_{i}_{j}",
+                    mask=condition_mask(p, live),
+                )
+                check_group_coord(con, techs, "transport_tech")
 
 
 def add_transport(

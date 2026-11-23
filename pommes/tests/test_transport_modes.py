@@ -650,8 +650,76 @@ def test_modal_statements_come_after_the_hourly_ones_and_before_the_blocks():
         assert names.index("operation_transport_net_generation_def") < names.index("operation_transport_mode_power_in_def")
 
 
-def test_interim_guard_mode_ramp():
-    with pytest.raises(NotImplementedError, match="the ramp on mode change is not built yet"):
-        build_model(transport_modes_toy(modes=BLEND, ramp=(0.5, 0.5)))
-    # a finite mode ramp on a technology that is not modal is not refused
-    build_model(with_modes(transport_modes_toy(techs=("pipe", "ship")), {"pipe": BLEND}, ramp={"ship": (0.5, 0.5)}))
+def _obj(**kw):
+    return _solve(transport_modes_toy(modes=BLEND, order=["blend", "methane"], **kw))
+
+
+def test_mode_ramp_up():
+    m = _obj(availability=[0, 1], ramp=(0.5, np.nan))
+    assert m.objective.value == pytest.approx(98.0, rel=1e-7)
+    flow = _flow(m)
+    np.testing.assert_allclose(flow.sel(transport_mode="blend").values[1], 5.0, atol=1e-6)
+    np.testing.assert_allclose(flow.sel(transport_mode="methane").values[1], 5.0, atol=1e-6)
+
+
+def test_mode_ramp_down():
+    assert _obj(availability=[1, 0], ramp=(np.nan, 0.5)).objective.value == pytest.approx(98.0, rel=1e-7)
+
+
+def test_mode_ramp_default_is_free():
+    assert _obj(availability=[0, 1]).objective.value == pytest.approx(96.0, rel=1e-7)
+    assert _obj(availability=[0, 1], ramp=(np.nan, np.nan)).objective.value == pytest.approx(96.0, rel=1e-7)
+
+
+def test_mode_ramp_bounds_a_single_mode_too():
+    # the rise of the second mode alone is bounded by down, not by up
+    kw = dict(availability=[0, 0], demand=[0, 20], shed=True)
+    m = _obj(ramp=(np.nan, 0.5), **kw)
+    assert m.objective.value == pytest.approx(1050.0, rel=1e-7)
+    np.testing.assert_allclose(_flow(m).sel(transport_mode="methane").values[1], 10.0, atol=1e-6)
+    assert _obj(ramp=(0.5, np.nan), **kw).objective.value == pytest.approx(100.0, rel=1e-7)
+
+
+def test_mode_ramp_divides_by_the_step():
+    kw = dict(dt=(2.0, 2.0), availability=[0, 1])
+    assert _obj(ramp=(0.5, np.nan), **kw).objective.value == pytest.approx(192.0, rel=1e-7)
+
+
+def test_mode_ramp_pairs_of_defined_modes_only(tmp_path):
+    for label in ("pure_h2", "h2/ch4"):
+        order = ["blend", "methane", label]
+        p = transport_modes_toy(
+            techs=("pipe", "pipe2"),
+            modes={"pipe": BLEND, "pipe2": {**BLEND, label: {"h2": 1.0}}},
+            order=order,
+            ramp=(0.5, 0.5),
+        )
+        m = build_model(p)
+        ramps = [n for n in m.constraints if "mode_ramp" in n]
+        pairs = ["0_1", "0_2", "1_2"]
+        # the order: for each pair up then down
+        assert ramps == [f"operation_transport_mode_ramp_{d}_constraint_{ij}" for ij in pairs for d in ("up", "down")]
+        for d in ("up", "down"):
+            for ij, techs in (("0_1", 2), ("0_2", 1), ("1_2", 1)):
+                labels = m.constraints[f"operation_transport_mode_ramp_{d}_constraint_{ij}"].labels
+                live = (labels != -1).any([x for x in labels.dims if x != "transport_tech"])
+                assert int(live.sum()) == techs
+                if techs == 1:
+                    assert live.sel(transport_tech="pipe2").item() and not live.sel(transport_tech="pipe").item()
+        if label == "h2/ch4":
+            m = solve_model(m)
+            from pommes.io.save_solution import save_solution
+
+            save_solution(m, str(tmp_path / "out"), export_csv=True, save_input=False)
+
+
+def test_mode_ramp_on_a_non_modal_technology_is_ignored():
+    two = with_modes(transport_modes_toy(techs=("pipe", "ship")), {"pipe": BLEND}, ramp={"ship": (0.5, 0.5)})
+    m = build_model(two)
+    assert not [n for n in m.constraints if "mode_ramp" in n]
+
+
+def test_mode_ramp_does_not_bound_the_first_step():
+    # a flow of 20 MW from the first step on: the ramp is not cyclic and has no step before it
+    m = _obj(availability=[0, 0], demand=[20, 0], shed=True, ramp=(np.nan, 0.5))
+    assert m.objective.value == pytest.approx(100.0, rel=1e-7)
