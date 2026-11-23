@@ -1,6 +1,8 @@
 """Outputs of block models: expand_to_hours, summaries, net generation, plots, save and read (multi-resolution, section 11)."""
 
+import importlib.util
 import warnings
+from pathlib import Path
 
 import matplotlib
 
@@ -10,6 +12,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+import pommes
 from pommes.io.calculate_summaries import calculate_total_net_generation
 from pommes.io.read_solution import read_dual, read_solution
 from pommes.io.save_solution import save_solution
@@ -29,6 +32,10 @@ from pommes.tests.time_blocks_helper import (
     hand_toy_b,
     net_import_two_lengths,
     solve_model,
+    transport_t2_availability_dataset,
+    transport_hand_toy,
+    transport_t2_two_lengths_dataset,
+    _transport_t2,
     with_blocks,
 )
 from pommes.utils import expand_to_hours, time_blocks
@@ -359,3 +366,129 @@ def test_outer_join_warning_is_filtered(tmp_path):
     # the filter is local: the warning is still raised by a plain read of the solution
     with pytest.warns(UserWarning, match=OUTER_JOIN):
         m.solution
+
+
+# ---------------------------------------------------------------------------
+# transport technologies on blocks (0.8.0)
+# ---------------------------------------------------------------------------
+
+
+def _all_block_transport() -> xr.Dataset:
+    """The ship ``S`` alone, on 24 h blocks: the model has no hourly transport variable."""
+    return with_blocks(_transport_t2([1.0] * 48, {"S": 3.0}, techs=("S",)), transport={"S": 24})
+
+
+def test_get_net_generation_with_an_all_block_transport():
+    p = _all_block_transport()
+    m, twin, s, s_twin = solve_pair(p, transport={"S": 24})
+    assert "operation_transport_net_generation" not in s and "operation_transport_block_24h_net_generation" in s
+    net = get_net_generation(s, p)
+    ref = get_net_generation(s_twin, hourly_params(p))
+    assert set(net.category.values) == set(ref.category.values)
+    assert abs(net.sel(category="S")).sum() > 1e-6
+    assert_same(net, ref)
+
+
+def test_get_net_generation_with_a_mix():
+    p = transport_t2_availability_dataset()
+    m, twin, s, s_twin = solve_pair(p, transport={"S": 24})
+    assert "operation_transport_net_generation" in s and "operation_transport_block_24h_net_generation" in s
+    net = get_net_generation(s, p)
+    ref = get_net_generation(s_twin, hourly_params(p))
+    assert set(net.category.values) >= {"H", "S"}
+    for tech in ("H", "S"):  # both groups are read
+        assert abs(net.sel(category=tech)).sum() > 1e-6
+    assert_same(net, ref)
+
+
+def test_module_hourly_transport():
+    p = transport_t2_availability_dataset()
+    m, twin, s, s_twin = solve_pair(p, transport={"S": 24})
+    for stem in ("power", "power_in", "net_generation"):
+        got = module_hourly(s, "transport", stem, p)
+        assert got.dims[0] != "time_block_24h" and "hour" in got.dims
+        assert abs(got.sel(transport_tech="S")).sum() > 1e-6
+        assert_same(got, module_hourly(s_twin, "transport", stem, hourly_params(p)), stem)
+
+
+def test_expand_to_hours_transport_energy_sums_back():
+    p = transport_t2_availability_dataset()
+    tb = time_blocks(p, warn=False)
+    s = read(solve_model(build_model(p)))
+    block = s["operation_transport_block_24h_net_generation"]
+    hours = expand_to_hours(block, tb, "energy")
+    assert hours.sizes["hour"] == 48 and abs(hours).sum() > 1e-6
+    b = tb.block_of_hour[24].values
+    for k in range(block.sizes["time_block_24h"]):
+        assert_same(hours.isel(hour=np.flatnonzero(b == k)).sum("hour"), block.isel(time_block_24h=k, drop=True))
+
+
+def test_summaries_transport_two_lengths():
+    p = transport_t2_two_lengths_dataset()
+    m, twin, s, s_twin = solve_pair(p, transport={"S": 12, "T": 24})
+    assert {"operation_transport_block_12h_net_generation", "operation_transport_block_24h_net_generation"} <= set(s)
+    table = calculate_total_net_generation(s, p)
+    ref = calculate_total_net_generation(s_twin, hourly_params(p))
+    assert table.index.is_unique
+    table, ref = table.sort_index(), ref.sort_index()
+    assert table.index.equals(ref.index)
+    np.testing.assert_allclose(table.values, ref.values, atol=1e-6)
+    for tech in ("S", "T"):  # each length carries something, so a table overwritten by the other would show
+        assert np.nansum(np.abs(table.xs(tech, level="tech").values)) > 1e-6
+
+
+@pytest.mark.filterwarnings("ignore:In a future version of xarray the default value for join")  # read_solution
+@pytest.mark.filterwarnings("ignore:The inplace keyword in DataFrame.set_index")  # read_solution
+def test_save_and_read_a_block_transport_solution(tmp_path):
+    p = transport_hand_toy()  # the cargo balance is 24 h as well: coarse duals
+    m = solve_model(build_model(p))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # the outer-join warning on transport_tech is filtered by save_solution
+        save_solution(m, str(tmp_path), model_parameters=p)
+    sol = xr.open_dataset(tmp_path / "solution.nc")
+    dual = xr.open_dataset(tmp_path / "dual.nc")
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=OUTER_JOIN)
+        orig = m.solution
+    name = "operation_transport_block_24h_power"
+    assert name in sol and "operation_adequacy_block_24h_constraint" in dual
+    np.testing.assert_allclose(sol[name].transpose(*orig[name].dims).values, orig[name].values, atol=1e-9)
+    coarse = m.constraints["operation_adequacy_block_24h_constraint"].dual
+    saved = dual["operation_adequacy_block_24h_constraint"].sel(resource=coarse.indexes["resource"])
+    np.testing.assert_allclose(saved.transpose(*coarse.dims).values, coarse.values, atol=1e-9)
+    csv = read_solution(str(tmp_path / "variables"))
+    for variable in (name, "operation_transport_block_24h_net_generation"):
+        assert float(np.nansum(csv[variable].values)) == pytest.approx(float(np.nansum(orig[variable].values)), abs=1e-5)
+    assert abs(float(np.nansum(csv[name].values))) > 1e-6
+    csv_dual = read_dual(str(tmp_path / "constraints"))
+    assert float(csv_dual["operation_adequacy_block_24h_constraint"].sum()) == pytest.approx(float(coarse.sum()), abs=1e-5)
+
+
+def test_power_max_block_dual_is_per_block():
+    """One 3 h block, availability 0.5 in one step: the dual of its power_max is that of the twin's binding hour, not three times it."""
+    p = with_blocks(_transport_t2([1.0] * 3, {"S": 3.0}, techs=("S",), availability={"S": [1.0, 0.5, 1.0]}), transport={"S": 3})
+    m, twin = solve_model(build_model(p)), solve_model(flat_twin(p, transport={"S": 3}))
+    names = ("operation_transport_block_3h_power_max_constraint", "operation_transport_power_max_constraint")
+    block, hourly = (read_dual_of(x, [n])[n].sel(transport_tech="S", year_op=2030) for x, n in zip((m, twin), names))
+    block = block.squeeze("time_block_3h", drop=True)
+    link = abs(hourly).sum("hour").idxmax("link").item()  # the link that carries the flow (the other one is degenerate)
+    per_hour = hourly.sel(link=link).values  # [0, d, 0]: only the 0.5 hour binds in the twin
+    assert abs(per_hour[1]) > 1e-6
+    assert per_hour[0] == pytest.approx(0, abs=1e-6) and per_hour[2] == pytest.approx(0, abs=1e-6)
+    assert float(block.sel(link=link)) == pytest.approx(per_hour[1], rel=1e-6)  # not repeated over the 3 hours
+
+
+def test_toy_examples_read_the_hourly_variables():
+    """``toy_trade.py`` and ``toy_policies.py`` set no length and read the hourly transport variables."""
+    folder = Path(pommes.__file__).parent / "examples" / "toy_trade"
+    for name in ("toy_trade.py", "toy_policies.py"):
+        text = (folder / name).read_text()
+        assert "transport_time_block_hrs" not in text and "operation_transport_power" in text
+    spec = importlib.util.spec_from_file_location("toy_trade_outputs", folder / "toy_trade.py")
+    toy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(toy)
+    ds = toy.build_toy_dataset()
+    assert "transport_time_block_hrs" not in ds or ds["transport_time_block_hrs"].isnull().all()
+    m = build_model(ds)
+    assert "operation_transport_power" in m.variables
+    assert not [v for v in m.variables if v.startswith("operation_transport_block_")]

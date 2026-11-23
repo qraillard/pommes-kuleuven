@@ -1294,6 +1294,7 @@ def test_t2_retrofit():
 
 
 def test_t2_ramps_short_last_block():
+    """T2: short last block, steps of 2, 1 and 1 h; both ramp rows bind, also into and out of the short block."""
     p = transport_t2_ramps_short_last_block_dataset()
     tb = time_blocks(p)
     assert tb.duration[8].values.tolist() == [8.0, 8.0, 4.0] and tb.first_step_duration[8].values.tolist() == [2.0] * 3

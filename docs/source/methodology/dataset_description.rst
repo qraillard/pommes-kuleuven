@@ -30,14 +30,14 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
       - Maximum spillage power [MW]. The energy spilled in a step is ``time_step_duration`` x power.
     * - process_minimum_startup_time, process_minimum_shutdown_time
       - Minimum time a process unit stays on (off) after a start-up (shut-down), counted in time steps: valid at 1 h steps, where it is in hours.
-    * - conversion_time_block_hrs, combined_time_block_hrs
-      - Block length [h] of the operation variables of a conversion (combined) technology: one decision per block of this many hours, anchored at the first step. ``nan``: one per time step. Whole hours, no coordinate other than the technology.
+    * - conversion_time_block_hrs, combined_time_block_hrs, transport_time_block_hrs
+      - Block length [h] of the operation variables of a conversion (combined, transport) technology: one decision per block of this many hours, anchored at the first step. ``nan``: one per time step. Whole hours, no coordinate other than the technology (all the links of a transport technology share its length). A block transport technology takes no delay and no linepack.
     * - resource_time_block_hrs
-      - Forces the block length [h] of a resource balance. ``nan``: derived from the technologies that can move the resource (hourly if any is hourly or a storage, transport or process).
+      - Forces the block length [h] of a resource balance. ``nan``: derived from the technologies that can move the resource (hourly if any is hourly or a storage, a process or a transport technology without a block length).
     * - conversion_time_block_rule
       - ``min`` (default) or ``mean``: the block availability is the minimum or the duration-weighted mean of the step availabilities. Read only for block technologies.
 
-Without these four parameters the model is exactly that of 0.6.1+kul. See the time blocks section of the model description.
+Without these five parameters the model is exactly that of 0.7.1+kul. See the time blocks section of the model description.
 
 .. list-table::
     :header-rows: 1
@@ -665,6 +665,11 @@ Without these four parameters the model is exactly that of 0.6.1+kul. See the ti
     * - transport_delay
       - 0.0
       - ['link', 'transport_tech']
+      - float64
+
+    * - transport_time_block_hrs
+      - nan
+      - ['transport_tech']
       - float64
 
     * - transport_power_capacity_min

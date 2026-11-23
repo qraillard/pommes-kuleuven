@@ -320,8 +320,11 @@ def get_net_generation(
             else xr.DataArray([], coords=dict(category=[]))
         )
     if "transport" in p.keys() and p.transport.any():
-        transport = s.operation_transport_net_generation.rename(
-            dict(transport_tech="category")
+        transport = module_hourly(s, "transport", "net_generation", p)
+        transport = (
+            transport.rename(dict(transport_tech="category"))
+            if transport is not None
+            else xr.DataArray([], coords=dict(category=[]))
         )
 
     da = xr.concat(

@@ -621,16 +621,18 @@ with the criticality of the hour: equation :eq:`progressive-turpe`.
 Time blocks (multi-resolution time steps)
 =========================================
 
-By default every operation variable has one value per time step. Four optional parameters let a conversion or a
-combined technology, and a resource balance, run on **time blocks** of fixed length: one decision and one balance row
-per block instead of one per step. Process, storage and transport stay at the step resolution. Without the parameters
-the model is exactly that of 0.6.1+kul (same variables, constraints, objective and LP file).
+By default every operation variable has one value per time step. Five optional parameters let a conversion, a
+combined or a transport technology, and a resource balance, run on **time blocks** of fixed length: one decision and
+one balance row per block instead of one per step. Process and storage stay at the step resolution. Without the
+parameters the model is exactly that of 0.7.1+kul (same variables, constraints, objective and LP file).
 
-Parameters (all ``nan`` by default): ``conversion_time_block_hrs`` and ``combined_time_block_hrs`` (block length
-:math:`L` in whole hours of a technology), ``resource_time_block_hrs`` (forces the length of a resource balance) and
-``conversion_time_block_rule`` (``"min"`` by default, or ``"mean"``: how the availability becomes a block value).
-None of them has an ``area``, ``year_op``, ``operating_condition`` or ``hour`` coordinate: the block structure is
-shared by the areas, years and conditions.
+Parameters (all ``nan`` by default): ``conversion_time_block_hrs``, ``combined_time_block_hrs`` and
+``transport_time_block_hrs`` (block length :math:`L` in whole hours of a technology), ``resource_time_block_hrs``
+(forces the length of a resource balance) and ``conversion_time_block_rule`` (``"min"`` by default, or ``"mean"``: how
+the availability becomes a block value). None of them has an ``area``, ``year_op``, ``operating_condition`` or ``hour``
+coordinate: the block structure is shared by the areas, years and conditions, and all the links of a transport
+technology share its length. A transport technology has no rule parameter: its availability is always aggregated by
+the minimum. A length on a transport technology is ignored when the ``transport`` flag is off.
 
 Blocks and anchoring
 --------------------
@@ -652,12 +654,18 @@ is a technology with a variable that can move that resource: a conversion or com
 factor, a storage, a transport (or its fuel), a process. Net imports, flexible demand, demand, load shedding and
 spillage are not counted: they follow the balance. The length of the balance of a resource is
 
-1. hourly if it has a counted hourly contributor (storage, transport, process, or a technology without a block length);
+1. hourly if it has a counted hourly contributor (storage, process, or a technology without a block length; a transport
+   technology is hourly only without a block length);
 2. otherwise the smallest block length among its counted block contributors (every other one must be a multiple of it);
 3. otherwise hourly.
 
-``resource_time_block_hrs`` replaces the derived length when it is finite (a **forced** coarse balance); storage,
-transport and process technologies then stay hourly and their step energies are summed into the block row. When some
+``resource_time_block_hrs`` replaces the derived length when it is finite (a **forced** coarse balance); storage and
+process technologies then stay hourly and their step energies are summed into the block row. A block transport
+technology of length :math:`L_T` enters a balance of length :math:`L_r` (the same balance at both ends of a link, and
+for its fuel the balance of the fuel resource) through the same conversion of resolution as any block technology:
+identity if :math:`L_T = L_r`, spread by duration share if :math:`L_T > L_r`, summed over the blocks if
+:math:`L_T < L_r`. A transport technology without a block length keeps its step flows even when conversion has blocks.
+When some
 resource has a block contributor but is derived hourly, ``build_model`` warns once and names the first hourly
 contributor that decided it (for example ``steel: hourly because of storage tech steel_tank``).
 
@@ -682,9 +690,11 @@ Block rows of a technology
 
 Conversion and combined power variables of a group of length :math:`L` are
 ``operation_conversion_block_{L}h_power`` and ``operation_combined_block_{L}h_power``, on ``time_block_{L}h``; their
-net generations (energies per block) are ``..._block_{L}h_net_generation``. Every block row has the name of the hourly
-row with ``operation_<module>_`` replaced by ``operation_<module>_block_{L}h_``. Capacities, planning and annuity rows
-are unchanged (one per unit).
+net generations (energies per block) are ``..._block_{L}h_net_generation``. The transport variables of a group are
+``operation_transport_block_{L}h_power`` (power withdrawn at the "to" end), ``..._power_in`` (power injected at the
+"from" end) and ``..._net_generation``, on ``(link, transport_tech, time_block_{L}h)``. Every block row has the name of
+the hourly row with ``operation_<module>_`` replaced by ``operation_<module>_block_{L}h_``. Capacities, planning,
+annuity and retrofit rows are unchanged (one per unit, or per link and transport technology).
 
 - **Availability.** One block availability :math:`\bar A_b` per unit, block, year and condition (missing values read
   as 1 before aggregating): the minimum of the step availabilities in the block (rule ``min``: power maximum is exact
@@ -699,6 +709,19 @@ are unchanged (one per unit).
 - **Annual quantities** (yearly production maximum, capacity factor, cumulative production, variable costs) use
   :math:`\sum_b D_L(b) \, P_b`, exact. The block net generation definition is
   :math:`NG_b = D_L(b) \, \text{factor} \, P_b`.
+- **Transport.** One flow decision per link, technology and block, and one row per block for each row family of the
+  hourly model, on the existing (link, technology) pairs. The block availability is the minimum of the step
+  availabilities in the block (missing values read as 1 first; no other rule): power maximum
+  :math:`P_b \leq \bar A_b \, \text{cap}`. Efficiency :math:`P^{in}_b \, \eta = P_b`. Net generation
+  :math:`NG_b = D_L(b) \, (\sum P_b \text{ at the "to" end} - \sum P^{in}_b \text{ at the "from" end})`. The fuel
+  drawn at the fuel area is :math:`D_L(b) \, \varphi \, P^{in}_b`, and the hurdle costs :math:`\sum_b D_L(b) \, P_b`.
+  Ramps :math:`P_b - P_{b-1} \leq \rho \, \text{cap} \, \Delta^0_L(b)` (and the mirror), on blocks other than the first
+  and where the ramp is finite, with the divisor of the combined module (the duration of the first step of the block).
+  A block transport technology has no delay set, no linepack and no level variable (refused inputs R11 and R12). A
+  ``nan`` ``transport_delay`` reads as 0. Its fuel emissions (``transport_fuel_emission_factor`` and
+  ``transport_fuel_total_emission_factor``) are counted in the arrival area and, like every block emission, spread over
+  the steps of each block by their duration share :math:`(\Delta T)_{t}/D_L(b)`: the emission rows stay hourly and
+  equal the flat twin's step by step.
 - **Daily production maximum.** The block length must divide the day length or be a multiple of it; the day energy of a
   flat block is then exact.
 - **Flexible demand** on a coarse resource has a block variable ``operation_flexdem_block_{L}h_demand``, an energy per
@@ -734,7 +757,18 @@ Refused inputs
   ``"min"``);
 - R9 a flexible-demand conservation length or window offset that is not a multiple of the length of a coarse balance
   with active flexible demand;
-- R10 every resource balance coarse (at least one resource must stay hourly).
+- R10 every resource balance coarse (at least one resource must stay hourly);
+- R11 a transport technology with a block length that has an existing (link, technology) pair with a ``transport_delay``
+  other than 0 (``nan`` reads as 0): ``{tech}: transport_delay = {value} h on link {link}: a block transport technology
+  ({L} h) takes no delay.`` Delays by whole blocks are left for a later release;
+- R12 a transport technology with a block length that has an existing pair with a finite
+  ``transport_linepack_capacity`` in some year: ``{tech}: transport_linepack_capacity is finite on link {link}: a block
+  transport technology ({L} h) takes no linepack.`` Both messages name the first offending link.
+
+A delay or a linepack on a pair that does not exist (it carries no resource), a delay on an hourly transport technology
+and a block length on a technology with no existing pair are not refused. R4 names the transport technology
+(``transport tech {name}``). R5 and R10 also apply to balances that are coarse only because of block transport
+technologies.
 
 Must-run on blocks is never refused. A length longer than the horizon gives one block.
 
@@ -751,7 +785,8 @@ equality forcing the power to be constant inside each block.
       - Status
     * - Block technology, every resource hourly
       - exact against the flat twin (power maximum with rule ``min``, must-run where the availability is constant in
-        each block, ramps, constant operation, annual sums, daily rule)
+        each block, ramps, constant operation, annual sums, daily rule; for a transport technology: power maximum with
+        rule ``min``, efficiency, fuel, hurdle costs, ramps)
     * - Must-run on an availability that varies inside a block
       - relaxation (the block rows use :math:`\bar A_b`; the block objective is at most the twin's)
     * - Availability rule ``mean``
@@ -761,10 +796,11 @@ equality forcing the power to be constant inside each block.
         net import is absent) and no flexible demand ramp is finite (with binding ramps the coarse model can be
         dearer): the block holds the energy of the block, not of each step; otherwise it has no sign against the hourly
         balance. Exact against the model run with steps of :math:`L` hours when every contributor has the balance's
-        length, the horizon is a multiple of :math:`L`, there is no conversion or combined ramp (mode-pair ramps
+        length, the horizon is a multiple of :math:`L`, there is no conversion, combined or transport ramp (mode-pair ramps
         included) and no daily production maximum (the block ramp divides by the duration of the block's first step and
         the daily row counts days), and, under rule ``mean``, the reference's availability is set to the
-        duration-weighted mean per step; with net import, the reference's two prices and two emission factors are set
+        duration-weighted mean per step (for transport, which has no rule, the reference's availability is the minimum
+        per step); with net import, the reference's two prices and two emission factors are set
         to the duration-weighted mean per step too, and carbon is then equal on yearly totals only (the block model's
         emission rows stay hourly)
     * - Load shedding and spillage on a coarse resource
@@ -776,8 +812,11 @@ equality forcing the power to be constant inside each block.
     * - Net imports on a coarse balance
       - exact against hourly imports held flat inside each block; equal to summed hourly imports when prices (and
         emission factors if carbon is on) are constant inside each block, otherwise a restriction of it
+    * - Delay or linepack of a block transport technology
+      - refused (R11, R12)
     * - Carbon of block technologies
-      - exact against the flat twin, step by step
+      - exact against the flat twin, step by step (the fuel emissions of a block transport technology are spread over the
+        hours of each block, as its flow is)
 
 Outputs
 -------
@@ -789,7 +828,13 @@ different technologies, ``model.solution`` joins them with ``nan`` outside their
 dropped). ``utils.expand_to_hours(da, tb, kind)`` maps a block array to the steps, ``kind="energy"`` multiplying by
 :math:`(\Delta T)_{t}/D_L(b)` and ``kind="intensive"`` repeating the value; ``post_process.module_hourly`` combines the
 hourly variable of a module (when it exists) and the expanded block variables, and ``get_net_generation`` and the plots
-use it, including the block load shedding and spillage. ``module_hourly``, and so ``get_net_generation`` and
+use it, including the block load shedding and spillage and the block transport technologies (``get_net_generation``
+reads ``module_hourly(s, "transport", "net_generation", p)``; a user who sets a transport length reads the powers with
+``module_hourly(s, "transport", "power", p)``, the hourly variable ``operation_transport_power`` holding only the
+technologies without a length). The outer-join ``UserWarning`` of ``model.solution`` then also arises on
+``transport_tech``. The dual of ``operation_transport_block_{L}h_power_max_constraint`` is one value per link,
+technology, block and year, in EUR per MW of the power of the block: it is the sum of the dual of the equivalent hourly
+rows over the block, not an hourly price, so it is not expanded to the steps. ``module_hourly``, and so ``get_net_generation`` and
 ``plot_power`` on block models, take a dense solution: a solution of the sparse engine (pommes-kul) must be densified
 first.
 
@@ -852,7 +897,8 @@ Operational constraints
 -----------------------
 
 The following hold in each condition: adequacy, capacity limits of the dispatch, ramps and constant operation,
-transport (the ``transport_delay`` shift runs along ``hour`` inside each condition), flexible demand windows and
+transport (the ``transport_delay`` shift of an hourly technology runs along ``hour`` inside each condition; a block
+transport technology takes no delay), flexible demand windows and
 horizon conservation, storage level (the cycle is closed within each condition: no energy moves from one
 condition to another), process unit commitment and minimum times (the integer variables are per condition: the
 MILP grows with the number of conditions), ``conversion_max_capacity_factor`` and

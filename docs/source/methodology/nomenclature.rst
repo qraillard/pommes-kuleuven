@@ -67,8 +67,8 @@ Indices and Index Sets
       - retrofit years
 
     * - :math:`L`
-      - ``conversion_time_block_hrs``, ``combined_time_block_hrs``, ``resource_time_block_hrs``
-      - Length in hours of the time blocks of a conversion or combined technology, or forced length of a resource balance (``nan``: step resolution)
+      - ``conversion_time_block_hrs``, ``combined_time_block_hrs``, ``transport_time_block_hrs``, ``resource_time_block_hrs``
+      - Length in hours of the time blocks of a conversion, combined or transport technology, or forced length of a resource balance (``nan``: step resolution)
 
     * - :math:`b \in \mathcal{B}_{L}`
       - ``time_block_{L}h``
@@ -83,8 +83,8 @@ Indices and Index Sets
       - Duration of the first time step of block :math:`b` [h] (divisor of the block ramps)
 
     * - :math:`\bar A_{b}`
-      - ``conversion_availability`` aggregated by ``conversion_time_block_rule``
-      - Availability of block :math:`b`: minimum (``min``) or duration-weighted mean (``mean``) of the step availabilities
+      - ``conversion_availability`` aggregated by ``conversion_time_block_rule``; ``transport_availability`` (minimum only)
+      - Availability of block :math:`b`: minimum (``min``) or duration-weighted mean (``mean``) of the step availabilities (a transport technology: minimum)
 
 General Parameters
 ==================
