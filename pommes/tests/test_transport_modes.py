@@ -765,6 +765,8 @@ def test_mode_ramp_does_not_bound_the_first_step():
 # --- Task 4 (step 0): the mode ramp, uneven steps, a ramp of 0, the capacity on the right-hand side, a pairless technology ---
 
 RAMP_UP_0_1 = "operation_transport_mode_ramp_up_constraint_0_1"
+PIN_MH = 321199.9439065916
+RAMP_DOWN_0_1 = "operation_transport_mode_ramp_down_constraint_0_1"
 
 
 def test_mode_ramp_with_uneven_steps():
@@ -826,9 +828,11 @@ def test_operating_conditions_with_modes():
     a, b = _solve(only([1.0, np.nan])), _solve(only([np.nan, 1.0]))
     assert both.objective.value == pytest.approx(0.4 * a.objective.value + 0.6 * b.objective.value, rel=1e-7)
     assert a.objective.value == pytest.approx(98.0, rel=1e-7)
+    assert b.objective.value == pytest.approx(118.0, rel=1e-7)
+    assert both.objective.value == pytest.approx(110.0, rel=1e-7)
     # the mask follows condition_mask: a condition without a weight has no cell of the flow, the tie, the net generation, the ramps
     for m, absent in ((a, "b"), (b, "a")):
-        for name in (MODE_FLOW, "operation_transport_mode_power_in_def", "operation_transport_mode_net_generation_def", RAMP_UP_0_1):
+        for name in (MODE_FLOW, "operation_transport_mode_power_in_def", "operation_transport_mode_net_generation_def", RAMP_UP_0_1, RAMP_DOWN_0_1):
             labels = m.constraints[name].labels if name in m.constraints else m.variables[name].labels
             assert (labels.sel({OPERATING_CONDITION: absent}) == -1).all(), (name, absent)
             assert (labels.sel({OPERATING_CONDITION: "a" if absent == "b" else "b"}) != -1).any(), name
@@ -852,7 +856,7 @@ def test_multi_horizon_with_modes():
     for year in (2030, 2040):
         # both modes are used in each year; P = eta(year) * the injected flow
         assert float(flow.sel(year_op=year, transport_mode="mix").sum()) > 1e-3
-        assert (float(flow.sel(year_op=year, transport_mode="cargo").sum()) > 1e-3) == (year == 2030)  # H is full of mix in 2040
+        assert float(flow.sel(year_op=year, transport_mode="cargo").sum()) > 1e-3
         want = eta.sel(year_op=year) * flow.sel(year_op=year).sum("transport_mode")
         assert_same(power.sel(year_op=year), want)
         # the net generation of oil at b has the arrival side eta of the year and the factor 0.1
@@ -863,6 +867,22 @@ def test_multi_horizon_with_modes():
                 p.transport_area_to.sel(link=link, transport_tech="H").item() == "b"
             )
         assert float(net.sel(area="b").sum()) == pytest.approx(expected, rel=1e-7)
+    # the departure side has no eta: the net generation of oil at a is -0.1 * mix flow leaving a, +0.1 * eta * mix flow arriving
+    for year in (2030, 2040):
+        out = float(solved(m, NET).sel(transport_tech="H", resource="oil", year_op=year, area="a").sum())
+        want = 0.0
+        for link in p.link.values:
+            mix = flow.sel(link=link, year_op=year, transport_mode="mix").sum().item()
+            if p.transport_area_from.sel(link=link, transport_tech="H").item() == "a":
+                want -= 0.1 * mix
+            else:
+                want += 0.1 * eta.sel(link=link, year_op=year).item() * mix
+        assert out == pytest.approx(want, rel=1e-7)
+        assert out < -1e-3
+    # the ramps bind (the demand steps): each one alone raises the objective, the pinned value is with both
+    assert m.objective.value == pytest.approx(PIN_MH, rel=1e-7)
+    for dropped in ("transport_mode_ramp_up", "transport_mode_ramp_down"):
+        assert _solve(p.drop_vars(dropped)).objective.value < m.objective.value - 1e-3, dropped
     # the mode ramps by operation year: up in 2030, down in 2040 only
     built = m.constraints
     for way, year, other in (("up", 2030, 2040), ("down", 2040, 2030)):

@@ -2303,7 +2303,7 @@ def transport_modes_unsorted_dataset() -> xr.Dataset:
     p = _pairless(p, "ab", "A")
     p = _pairless(p, "ba", "A")
     own = {"methane": {"cargo": 1.0}, "mix": {"cargo": 0.8, "oil": 0.2}}
-    p = with_modes(p, {"Z": {"methane": {"cargo": 1.0}, "mix": MIX["mix"]}, "A": own}, ["methane", "mix"])
+    p = with_modes(p, {"Z": {"methane": {"cargo": 1.0}, "mix": MIX["mix"]}, "A": own}, ["mix", "methane"])
     return p.sel(link=["ba", "ab"])
 
 
@@ -2347,8 +2347,17 @@ def _blend_on_h(p: xr.Dataset, eta=(0.9, 0.85), up=(0.5, np.nan), down=(np.nan, 
 
 
 def transport_modes_multi_horizon_dataset() -> xr.Dataset:
-    """``transport_t2_multi_horizon_dataset`` with the hourly ship ``H`` modal (``MIX``), ``eta`` 0.9 then 0.85, ``up`` in 2030 and ``down`` in 2040."""
-    return _blend_on_h(transport_t2_multi_horizon_dataset())
+    """``transport_t2_multi_horizon_dataset`` with the hourly ship ``H`` modal (``MIX``), ``eta`` 0.9 then 0.85, ``up`` 0.05 in 2030 and ``down`` 0.04 in 2040 (both bind: the demand steps)."""
+    p = transport_t2_multi_horizon_dataset()
+    # the mode mix moves, so that the mode ramps bind: the cargo demand steps up in 2030 (half the first 12 hours, the ramp up),
+    # the oil demand steps up in 2040 (the mix rises: the ramp down); off the 24 h blocks of the ship S
+    hour = p.hour.values
+    step = xr.DataArray(np.where(hour < 12, 0.5, 1.0), dims="hour", coords={"hour": hour})
+    cargo_2030 = (p.resource == "cargo") & (p.year_op == 2030)
+    oil_2040 = (p.resource == "oil") & (p.year_op == 2040)
+    p = _blend_on_h(p, up=(0.05, np.nan), down=(np.nan, 0.04))
+    p["demand"] = xr.where(cargo_2030 | oil_2040, p.demand * step, p.demand).transpose(*p.demand.dims)
+    return p
 
 
 def transport_modes_retrofit_dataset() -> xr.Dataset:
