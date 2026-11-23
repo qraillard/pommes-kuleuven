@@ -98,6 +98,12 @@ def test_transport_modal_tables():
     assert float(modal.factor.sel(transport_tech="pipe", transport_mode="blend", resource="h2")) == 0.0
     assert not np.isnan(modal.factor.values).any()
     assert set(modal.carried.resource.values[modal.carried.sel(transport_tech="pipe").values]) == {"ch4"}
+    # nothing sorts the modes: the coordinate as the dataset gives it (the sense of up and down depends on it)
+    ordered = transport_modal(transport_modes_toy(modes=BLEND, order=["methane", "blend"]))
+    assert list(ordered.modes) == ["methane", "blend"]
+    assert ordered.defined.transport_mode.values.tolist() == ["methane", "blend"]
+    assert ordered.factor.transport_mode.values.tolist() == ["methane", "blend"]
+    assert float(ordered.factor.sel(transport_tech="pipe", transport_mode="blend", resource="h2")) == 0.1
     # no modal technology, or none of the conditions of section 5.3
     assert transport_modal(p.assign(transport=np.array(False))) is None
     assert transport_modal(p.drop_vars(["transport_mode_factor", "transport_mode"])) is None
@@ -295,6 +301,7 @@ def test_modal_inputs_from_csv(tmp_path):
     assert "ammonia" not in factor.resource.values
     modal = transport_modal(p)
     assert list(modal.techs) == ["methane_pipe"]
+    assert list(modal.modes) == ["methane", "blend"]
     up, down = p.transport_mode_ramp_up, p.transport_mode_ramp_down
     assert set(up.dims) == set(down.dims) == {"link", "transport_tech", "year_op"}
     assert float(up.sel(link="link_1", transport_tech="methane_pipe", year_op=2030)) == 0.5
