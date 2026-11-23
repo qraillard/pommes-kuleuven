@@ -20,6 +20,7 @@ from pommes.tests.time_blocks_helper import (
     PURE,
     as_modal,
     assert_same,
+    densify_any,
     solve_model,
     solved,
     transport_modes_block_elsewhere_dataset,
@@ -35,6 +36,7 @@ from pommes.tests.time_blocks_helper import (
     transport_toy,
     variables_in,
     with_blocks,
+    with_carbon,
     with_modes,
 )
 from pommes.utils import (
@@ -912,7 +914,7 @@ def test_outputs(tmp_path):
     # the toy with the blend: the flow by mode makes the round trip, NetCDF and CSV
     p = transport_modes_toy(modes=BLEND)
     m = _solve(p)
-    solution = m.solution.copy(deep=True)
+    solution = m.solution.copy(deep=True).map(densify_any)  # the sparse engine solves on units
     save_solution(m, str(tmp_path / "out"), export_csv=True, save_input=False)
     saved = xr.open_dataset(tmp_path / "out" / "solution.nc")
     assert saved[MODE_FLOW].dims == solution[MODE_FLOW].dims
@@ -930,11 +932,11 @@ def test_outputs(tmp_path):
     np.testing.assert_allclose(pipe.sel(resource="h2", area="b").values.ravel(), [1, 1], atol=1e-6)
     np.testing.assert_allclose(pipe.sel(resource="ch4", area="b").values.ravel(), [9, 9], atol=1e-6)
     # no summary has a column for the mode, and no new name looks like a 1:1 existing one
-    for kind in ("power_capacity", "net_generation", "costs"):  # the toy has no carbon: no emissions table
-        table = calculate_total_of_a_type(kind, solution, p, "operation", True, False)
-        assert "transport_mode" not in table.index.names and "transport_mode" not in table.columns
-    carbon = transport_modes_carbon_dataset()
-    s_carbon = _solve(carbon).solution
+    carbon = with_carbon(p, conversion={"well": 0.2}, tax=7.0)  # carbon on: the emissions table exists
+    s_carbon = _solve(carbon).solution.map(densify_any)
+    for kind in ("power_capacity", "net_generation", "costs", "emissions"):
+        table = calculate_total_of_a_type(kind, s_carbon, carbon, "operation", True, False)
+        assert not table.empty and "transport_mode" not in table.index.names and "transport_mode" not in table.columns, kind
     for name, frame in generate_summary_dataframes_from_results(s_carbon, carbon).items():
         assert "transport_mode" not in list(getattr(frame, "index", pd.Index([])).names) + list(getattr(frame, "columns", [])), name
         assert "transport_mode" not in getattr(frame, "dims", ()), name
@@ -946,7 +948,7 @@ def test_outputs(tmp_path):
     modal, twin = _solve(as_modal(base, ["Z"])), _solve(base)  # A stays plain: the flow by mode lives on Z only
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        s_modal, s_twin = modal.variables.solution, twin.variables.solution
+        s_modal, s_twin = modal.variables.solution.map(densify_any), twin.variables.solution.map(densify_any)
     assert any(OUTER_JOIN in str(w.message) for w in caught)  # the warning is raised, and the readers do not fail on it
     assert list(s_twin["operation_transport_power"].transport_tech.values) == ["Z", "A"]
     assert list(s_modal["operation_transport_power"].transport_tech.values) == ["A", "Z"]  # outer-joined and sorted
