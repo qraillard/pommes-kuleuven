@@ -646,7 +646,8 @@ def test_modal_statements_come_after_the_hourly_ones_and_before_the_blocks():
         assert names.index(last_hourly) < names.index(modal[0]) and names.index(modal[-1]) < first_block
         assert names[names.index(modal[0]) : names.index(modal[-1]) + 1] == modal
     assert list(m.variables).index("operation_transport_power_in") < list(m.variables).index(MODE_FLOW)
-    assert names.index("operation_transport_net_generation_def") < names.index("operation_transport_mode_power_in_def")
+    if "operation_transport_net_generation_def" in names:  # the dense engine builds it empty, the sparse one not at all
+        assert names.index("operation_transport_net_generation_def") < names.index("operation_transport_mode_power_in_def")
 
 
 def test_interim_guard_mode_ramp():
