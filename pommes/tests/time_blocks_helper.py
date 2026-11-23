@@ -349,14 +349,14 @@ def transport_t2_interior_dataset() -> xr.Dataset:
     return with_blocks(p, transport={"S": 24, "T": 12})
 
 
-def _t2_fuel(dt, caps, fuel, resource="oil", area=None, bunker=(100.0, 0.0), techs=("H", "S")):
+def _t2_fuel(dt, caps, fuel, resource="oil", area=None, bunker=(100.0, 0.0), techs=("H", "S"), **kw):
     """
     ``_transport_t2`` with ships that burn fuel: ``fuel`` (tech -> consumption) of ``resource`` (``oil``: the bunker
     conversion makes it, or ``cargo``), drawn at ``area`` (tech -> area, default the "from" end). The bunker has the
     fixed capacity ``bunker`` (MW at ``a``, at ``b``: its fixed cost is then a constant and the oil duals are the
     variable cost), so that the optimum is unique and the fuel is made where it is drawn.
     """
-    p = _transport_t2(dt, caps, techs=techs, fuel=fuel, fuel_area=area or {})
+    p = _transport_t2(dt, caps, techs=techs, fuel=fuel, fuel_area=area or {}, **kw)
     p["transport_fuel_resource"] = p.transport_fuel_resource.where(p.transport_fuel_resource != "oil", resource)
     cap = np.array([[10.0, bunker[0]], [0.0, bunker[1]]])
     p["conversion_power_capacity_max"] = (("area", "conversion_tech"), cap)
@@ -913,6 +913,195 @@ def transport_t2_fuel_uneven_steps_dataset() -> xr.Dataset:
     return with_blocks(p, transport={"S": 4})
 
 
+# --- Task 7: whole-model datasets (T1, T2 conditions / multi-horizon / retrofit / ramps, T3) ---
+
+
+def transport_t1_dataset() -> xr.Dataset:
+    """
+    T1: steps of 3 h and ``S`` on blocks of 3 h (a block is a step), with efficiency 0.8, fuel (oil from the bunker),
+    ramps 0.1 (up and down), a hurdle cost and an availability that alternates 1 and 0.4 (the hourly ``H`` burns too).
+    """
+    p = _t2_fuel(
+        [3.0] * 16,
+        {"H": 1.5, "S": 3.0},
+        {"H": 0.1, "S": 0.2},
+        eff={"S": 0.8},
+        ramp={"S": (0.1, 0.1)},
+        availability={"S": [1.0, 0.4] * 8},
+    )
+    return with_blocks(p, transport={"S": 3})
+
+
+def transport_t2_conditions_dataset() -> xr.Dataset:
+    """
+    T2: two operating conditions (weights 0.4 and 0.6) with another demand (1 and 1.3 times) and another availability
+    of ``S``: block minima 0.5 and 0.8 under ``a``, 0.7 and 0.6 under ``b``; efficiency 0.8 on ``S``.
+    """
+    day_a = [1.0] * 20 + [0.5, 0.5, np.nan, np.nan] + [1.0] * 20 + [0.8, 0.8, np.nan, np.nan]
+    day_b = [1.0] * 8 + [0.7] * 4 + [1.0] * 12 + [1.0] * 6 + [0.6] * 6 + [1.0] * 12
+    a = _transport_t2([1.0] * 48, {"H": 1.5, "S": 3.0}, eff={"S": 0.8}, availability={"S": day_a})
+    b = _transport_t2([1.0] * 48, {"H": 1.5, "S": 3.0}, eff={"S": 0.8}, availability={"S": day_b})
+    p = with_conditions(
+        a,
+        [0.4, 0.6],
+        demand=[a.demand, 1.3 * a.demand],
+        transport_availability=[a.transport_availability, b.transport_availability],
+    )
+    return with_blocks(p, transport={"S": 24})
+
+
+def _transport_on_years(p: xr.Dataset, years: dict) -> xr.Dataset:
+    """
+    ``p`` (one year of each kind) on ``years`` (``year_inv``, ``year_dec``, ``year_op``): the transport and conversion
+    technologies live 20 years, at an annuity that is distinct and positive per technology, link, decommissioning year
+    and vintage. ``year_op`` repeats the first year's data.
+    """
+    years = {k: np.array(v, dtype="int64") for k, v in years.items()}
+    out = p.sel(year_op=[p.year_op.values[0]] * years["year_op"].size).assign_coords(year_op=years["year_op"])
+    out = out.drop_vars(
+        ["conversion_end_of_life", "conversion_annuity_cost", "transport_life_span", "transport_end_of_life", "transport_annuity_cost"]
+    ).drop_vars(["year_inv", "year_dec"]).assign_coords(year_inv=years["year_inv"], year_dec=years["year_dec"])
+    for module, dims in (("conversion", ["conversion_tech"]), ("transport", ["link", "transport_tech"])):
+        sizes = [out.sizes[d] for d in dims]
+        out[f"{module}_end_of_life"] = ((*dims, "year_inv"), np.broadcast_to(years["year_inv"] + 20.0, (*sizes, years["year_inv"].size)).copy())
+        k = np.arange(np.prod(sizes)).reshape(sizes)
+        # the vintage term is not linear in the year (a linear one makes two vintages cost the same as one of the middle year)
+        vintage = np.array([0.0, 0.037, 0.095, 0.16])[: years["year_inv"].size]
+        cost = 0.4 + 0.05 * k[..., None, None] + 0.02 * np.arange(years["year_dec"].size)[:, None] + vintage[None, :]
+        out[f"{module}_annuity_cost"] = ((*dims, "year_dec", "year_inv"), cost)
+    out["transport_life_span"] = (("link", "transport_tech", "year_inv"), np.full((out.sizes["link"], out.sizes["transport_tech"], years["year_inv"].size), 20.0))
+    out["conversion_life_span"] = ("conversion_tech", np.full(out.sizes["conversion_tech"], 20.0))
+    return out
+
+
+MULTI_HORIZON_YEARS = dict(year_inv=[2020, 2030, 2040], year_dec=[2040, 2050, 2060], year_op=[2030, 2040])
+
+
+def transport_t2_multi_horizon_dataset() -> xr.Dataset:
+    """
+    T2: investment, early decommissioning and two operation years (2030 and 2040).
+
+    The ships are capped at 1.5 (``H``) and 3 (``S``) MW in 2030 and at 1 and 2 MW in 2040, and the 2020 vintage may not
+    be built, so that the 2030 vintage serves the first year and part of it leaves in 2040 (early decommissioning:
+    year_dec 2040, before the end of its life in 2050), the 2040 vintage completing the second year. The annuities,
+    hurdle costs and demand are distinct per technology, link, vintage, decommissioning year and operation year.
+    """
+    p = _transport_t2([1.0] * 48, {"H": 1.5, "S": 3.0}, eff={"S": 0.8})
+    p = _transport_on_years(p, MULTI_HORIZON_YEARS)
+    p["transport_early_decommissioning"] = np.array(True)
+    cap = p["transport_power_capacity_max"].copy()
+    cap.loc[{"year_op": 2040}] = cap.loc[{"year_op": 2040}] * (2.0 / 3.0)
+    p["transport_power_capacity_max"] = cap
+    invest = xr.full_like(p.transport_annuity_cost.isel(year_dec=0, drop=True), np.nan)
+    invest.loc[{"year_inv": 2020}] = 0.0
+    p["transport_power_capacity_investment_max"] = invest
+    hurdle = p["transport_hurdle_costs"].copy()
+    hurdle.loc[{"year_op": 2040}] = hurdle.loc[{"year_op": 2040}] * 1.7
+    p["transport_hurdle_costs"] = hurdle
+    p["demand"] = p.demand * xr.DataArray([1.0, 0.9], dims="year_op", coords={"year_op": p.year_op})
+    return with_blocks(p, transport={"S": 24})
+
+
+def transport_t2_retrofit_dataset() -> xr.Dataset:
+    """
+    T2 retrofit: ``H`` (hourly, buildable in 2020 only, decommissioned in 2040) serves 2030; ``S`` (block ship) cannot
+    be built and gets its capacity only by retrofit of ``H`` in 2040, the second year of operation (demand grows 1.6
+    times). ``S`` runs on the same ends as ``H`` (the retrofit is per link). Early decommissioning off, distinct costs.
+    """
+    p = _transport_t2([1.0] * 48, {"H": 1.5, "S": 3.0}, eff={"S": 0.8})
+    p = _transport_on_years(p, {k: v for k, v in RETROFIT_YEARS.items() if k != "year_ret"})
+    p["transport_area_from"] = p.transport_area_from.where(p.transport_tech != "S", p.transport_area_from.sel(transport_tech="H"))
+    p["transport_area_to"] = p.transport_area_to.where(p.transport_tech != "S", p.transport_area_to.sel(transport_tech="H"))
+    p["demand"] = p.demand * xr.DataArray(RETROFIT_DEMAND_GROWTH, dims="year_op", coords={"year_op": p.year_op})
+    invest = xr.full_like(p.transport_annuity_cost.isel(year_dec=0, drop=True), np.nan)
+    invest.loc[{"transport_tech": "H", "year_inv": [2030, 2040]}] = 0.0  # H: the 2020 vintage only
+    invest.loc[{"transport_tech": "S"}] = 0.0  # S: retrofit only
+    p["transport_power_capacity_investment_max"] = invest
+    p = _with_retrofit(p, "transport", ("H", "S"))
+    return with_blocks(p, transport={"S": 24})
+
+
+def transport_t2_ramps_short_last_block_dataset() -> xr.Dataset:
+    """
+    T2: 20 h of steps 2, 1 and 1 h, L = 8 (blocks of 8, 8 and 4 h, each starting with its long step: the ramp divisor
+    is 2); ``S`` has efficiency 0.8, availability 1, 0.4 and 1 per block and ramps 0.1 (up) and 0.12 (down): both ramp
+    rows bind, also into and out of the short last block.
+    """
+    avail = np.repeat([1.0, 0.4, 1.0], [6, 6, 3])
+    p = _transport_t2([2.0, 1.0, 1.0] * 5, {"H": 1.5, "S": 3.0}, eff={"S": 0.8}, ramp={"S": (0.1, 0.12)}, availability={"S": avail})
+    return with_blocks(p, transport={"S": 8})
+
+
+def transport_hand_toy() -> xr.Dataset:
+    """
+    T3(a): an all-block model by hand (no hourly transport technology), two days of 24 steps of 1 h.
+
+    ``mill`` at ``a`` (24 h blocks, cost 2 per MWh, no fixed cost, no capacity bound); the ship ``S`` a to b (24 h,
+    efficiency 0.8, hurdle cost 0.5, no fixed cost); the demand of ``cargo`` at ``b`` is 0 for 12 h and 2 MW for 12 h
+    each day; spillage is free, shedding is not allowed; ``operation_year_duration`` is 48 (normalisation 1). Cargo has
+    block contributors only, so its balance is daily: per day 24 delivered, 30 injected and 30 produced, 2 * 30 + 0.5 *
+    24 = 72, objective 144; hourly balances (the flat twin) give 288.
+    """
+    p = transport_toy([1.0] * 48, [0.0] * 12 + [2.0] * 12, techs=["S"], eff={"S": 0.8})
+    p = p.sel(resource=["idle", "cargo"], conversion_tech=["mill"]).copy(deep=True)
+    p["operation_year_duration"] = ("year_op", [48.0])
+    p["spillage_cost"] = ("resource", [0.0, 0.0])
+    p["load_shedding_max_capacity"] = ("resource", [0.0, 0.0])
+    p["load_shedding_cost"] = ("resource", [0.0, 0.0])
+    p["conversion_variable_cost"] = ("conversion_tech", [2.0])
+    p["conversion_fixed_cost"] = ("conversion_tech", [0.0])
+    p["transport_fixed_cost"] = xr.zeros_like(p.transport_fixed_cost)
+    p["transport_hurdle_costs"] = xr.full_like(p.transport_hurdle_costs, 0.5)
+    return with_blocks(p, conversion={"mill": 24}, transport={"S": 24})
+
+
+def _t3b_base(**kw) -> xr.Dataset:
+    """
+    The ship ``S`` alone on a cargo demand that alternates 0.5 and 3.5 MW every 6 h (mean 2): the flow held over a block
+    cannot follow it, so a balance summed over the block is cheaper than the hourly ones.
+    """
+    p = transport_toy([1.0] * 48, [0.5] * 6 + [3.5] * 6, techs=["S"], **kw)
+    p["load_shedding_max_capacity"] = ("resource", [0.0, 50.0, 0.0])
+    p["load_shedding_cost"] = ("resource", [0.0, 4.0, 0.0])
+    return p
+
+
+def transport_t3b_forced_dataset() -> xr.Dataset:
+    """T3(b): ``S`` on 24 h blocks, an hourly ``mill`` and an hourly storage ``silo`` on cargo, no length forced (the test forces 24, 168 and 12 h)."""
+    return with_blocks(_t3b_base(silo=True), transport={"S": 24})
+
+
+def transport_t3b_derived_finer_dataset() -> xr.Dataset:
+    """T3(b): ``S`` on 24 h and ``mill`` on 12 h, no storage: the derived balance of cargo is 12 h, finer than the ship."""
+    return with_blocks(_t3b_base(), conversion={"mill": 12}, transport={"S": 24})
+
+
+T3C_AVAILABILITY = [  # per block of 4 h: minima 0.6, 1, 0.8, 0.5, 1, 0.7 (NaN reads as 1)
+    *[1.0, 0.6, np.nan, 1.0],
+    *[1.0, 1.0, np.nan, np.nan],
+    *[0.9, 0.8, 1.0, 0.95],
+    *[0.5, 1.0, 1.0, 1.0],
+    *[1.0] * 4,
+    *[0.7, 0.7, 1.0, np.nan],
+]
+
+
+def transport_t3c_uniform_dataset() -> xr.Dataset:
+    """
+    T3(c): ship, mill and bunker all on blocks of 4 h, 24 steps of 1 h, no ramp: cargo and oil are derived at 4 h.
+
+    ``S`` has efficiency 0.8, burns oil from the bunker at the "from" end and has an availability that varies inside the
+    blocks (``T3C_AVAILABILITY``, partly NaN); the hurdle cost is the toy's. The demand varies from step to step.
+    ``coarse_step_reference(p, 4)`` is today's model with steps of 4 h.
+    """
+    p = _t2_fuel([1.0] * 24, {"S": 3.0}, {"S": 0.2}, techs=("S",), eff={"S": 0.8}, availability={"S": T3C_AVAILABILITY})
+    for name in _NO_TRANSPORT_RAMPS:
+        p[name] = xr.DataArray(np.nan)
+    p = with_blocks(p, conversion={"mill": 4, "bunker": 4}, transport={"S": 4})
+    check_coarse_step_contract(p)
+    return p
+
+
 def solve_model(m):
     """Solve ``m`` with HiGHS and assert it is optimal; returns ``m``."""
     assert m.solve(solver_name="highs")[:2] == ("ok", "optimal")
@@ -1272,7 +1461,11 @@ _NO_RAMPS = (
     "combined_mode_ramp_down",
     "conversion_max_daily_production",
 )
+# the transport ramps, NaN and checked on the transport datasets only (``coarse_step_dataset`` NaNs ``_NO_RAMPS`` on
+# datasets with no transport module)
+_NO_TRANSPORT_RAMPS = ("transport_ramp_up", "transport_ramp_down")
 _STEP_SUMS = ("demand", "flexdem_demand")  # energies per step: summed per block
+_STEP_MINS = ("transport_availability",)  # per-hour parameters: minimum per block, NaN read as 1 first (section 5)
 _STEP_MEANS = (  # per-hour parameters: Δ-weighted mean per block, NaN read as 1 first (section 6.1)
     "conversion_availability",
     "net_import_import_price",
@@ -1283,7 +1476,7 @@ _STEP_MEANS = (  # per-hour parameters: Δ-weighted mean per block, NaN read as 
 
 
 def _check_no_ramps(p: xr.Dataset) -> None:
-    for name in _NO_RAMPS:
+    for name in (*_NO_RAMPS, *_NO_TRANSPORT_RAMPS):
         if name in p and np.isfinite(p[name]).any():
             raise AssertionError(f"{name} is finite: the uniform coarse step has no ramp and no daily cap (C17)")
 
@@ -1311,7 +1504,8 @@ def coarse_step_reference(p: xr.Dataset, L: int) -> xr.Dataset:
 
     ``hour`` becomes one label per block of ``p``, ``time_step_duration`` the block durations, ``demand`` and
     ``flexdem_demand`` are summed per block, ``conversion_availability`` and the four net_import hourly parameters
-    are the Δ-weighted mean per block (``block_mean``, NaN read as 1 first, as the block model does, section 6.1). The
+    are the Δ-weighted mean per block (``block_mean``, NaN read as 1 first, as the block model does, section 6.1);
+    ``transport_availability`` is the minimum per block (NaN read as 1 first). The
     block inputs are removed, so that ``build_model`` runs today's code on it. Raises ``AssertionError`` on a finite
     ramp or daily cap (the block rows differ from today's there, on purpose) and ``ValueError`` on any other
     per-hour parameter.
@@ -1333,6 +1527,8 @@ def coarse_step_reference(p: xr.Dataset, L: int) -> xr.Dataset:
             out = da.groupby(tb.block_of_hour[L]).sum()
         elif name in _STEP_MEANS:
             out = block_mean(xr.where(np.isfinite(da), da, 1.0), tb, L)
+        elif name in _STEP_MINS:
+            out = xr.where(np.isfinite(da), da, 1.0).groupby(tb.block_of_hour[L]).min()
         else:
             raise ValueError(f"{name}: no rule to put a per-hour parameter on steps of {L} h")
         new[name] = out.rename({block: "hour"})
