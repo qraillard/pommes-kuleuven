@@ -135,6 +135,13 @@ def _group_variables(
 
     # Operation - transport intermediate variables
 
+    carried = np.equal(p.transport_resource, p.resource).any(
+        [dim for dim in ["link"] if dim in p.transport_resource.dims]
+    )
+    # a modal technology also carries the resources of its modes (E2 defines them)
+    if (modal := transport_modal(p)) is not None:
+        carried = carried | modal.carried
+
     net_generation = m.add_variables(
         name=f"{prefix}net_generation",
         coords=[
@@ -145,12 +152,7 @@ def _group_variables(
             p.year_op,
             *condition_coords(p),
         ],
-        mask=condition_mask(
-            p,
-            np.equal(p.transport_resource, p.resource).any(
-                [dim for dim in ["link"] if dim in p.transport_resource.dims]
-            ),
-        ),
+        mask=condition_mask(p, carried),
     )
     return power, power_in, level, net_generation
 
@@ -363,6 +365,10 @@ class _TransportRows:
     def net_generation_def(self):
         """Net generation (energy per step or per block) from the flows at the two ends."""
         p = self.p
+        carried = np.equal(p.transport_resource, p.resource)
+        # the modal technologies are defined by the flows by mode (E2)
+        if (modal := transport_modal(p)) is not None:
+            carried = carried & ~modal.modal
         self.add(
             -self.net_generation
             + self.D
@@ -377,7 +383,7 @@ class _TransportRows:
                     "link"
                 )
             ).where(
-                np.equal(p.transport_resource, p.resource).any(
+                carried.any(
                     [
                         dim
                         for dim in ["link", "year_inv"]
@@ -389,7 +395,7 @@ class _TransportRows:
             "net_generation_def",
             mask=condition_mask(
                 p,
-                np.equal(p.transport_resource, p.resource).any(
+                carried.any(
                     [dim for dim in ["link"] if dim in p.transport_resource.dims]
                 ),
             ),
@@ -422,6 +428,52 @@ class _TransportRows:
             "costs_def",
             mask=condition_mask(p),
         )
+
+
+def _add_modal(m, p, tb, modal, capacity, power_in, net_generation) -> None:
+    """
+    The flow by mode of the modal technologies, its tie to the total injected flow (E1), their net generation (E2).
+
+    ``modal`` is ``transport_modal`` of the full ``p``; ``capacity``, ``power_in`` and ``net_generation`` are the
+    hourly group's variables, restricted here by label to ``modal.techs`` (``capacity`` is read by the ramp on mode
+    change). The parameters are read on the full ``p`` restricted by label. A modal technology takes no delay and no
+    linepack (R13, R14), so its withdrawn flow is ``eta`` times the injected flow at the same step.
+    """
+    techs, modes = modal.techs, modal.modes
+    q = p.sel(transport_tech=techs)
+    pair = transport_pair_exists(p).sel(transport_tech=techs)
+    sel = lambda x: x.sel(transport_tech=techs)  # noqa: E731
+    flow = m.add_variables(
+        name="operation_transport_mode_power_in",
+        lower=0,
+        coords=[p.link, techs, modes, p.hour, p.year_op, *condition_coords(p)],
+        mask=condition_mask(p, pair & sel(modal.defined)),
+    )
+    check_group_coord(flow, techs, "transport_tech")
+    con = m.add_constraints(
+        flow.sum("transport_mode") - sel(power_in) == 0,
+        name="operation_transport_mode_power_in_def",
+        mask=condition_mask(p, pair),
+    )
+    check_group_coord(con, techs, "transport_tech")
+    # arrival with the efficiency, departure without it
+    net = (
+        (flow * q.transport_efficiency).where(p.area == q.transport_area_to).sum("link")
+        - flow.where(p.area == q.transport_area_from).sum("link")
+    )
+    con = m.add_constraints(
+        -sel(net_generation)
+        + p.time_step_duration * (net * sel(modal.factor)).sum("transport_mode")
+        == 0,
+        name="operation_transport_mode_net_generation_def",
+        mask=condition_mask(p, sel(modal.carried)),
+    )
+    check_group_coord(con, techs, "transport_tech")
+    # interim, until the ramp on mode change is built (Task 3)
+    for name in ("transport_mode_ramp_up", "transport_mode_ramp_down"):
+        if name in q and np.isfinite(q[name]).any():
+            raise NotImplementedError("the ramp on mode change is not built yet")
+
 
 def add_transport(
     model: Model,
@@ -589,8 +641,8 @@ def add_transport(
     check_transport_single_resource(p)
     check_transport_modes(p, tb)
     check_block_transport(p, tb)
-    if transport_modal(p) is not None:  # interim, until the modal statements are built
-        raise NotImplementedError("transport technologies with modes are not built yet")
+
+    modal = transport_modal(p)
 
     # The delay between injection and delivery is given in hours (default 0);
     # the flow is rolled by whole time steps, so it is converted to steps,
@@ -868,6 +920,18 @@ def add_transport(
         -planning_transport_costs + annuity_terms == 0,
         name="planning_transport_costs_def",
     )
+
+    # Transport technologies with modes, after the hourly statements and before the block groups
+    if modal is not None:
+        _add_modal(
+            m,
+            p,
+            tb,
+            modal,
+            operation_transport_power_capacity,
+            hourly_variables[1],
+            hourly_variables[3],
+        )
 
     # Block groups, after the module's last statement: their labels follow
     # every hourly label, and each row is the hourly row on the block axis.
