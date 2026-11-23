@@ -834,7 +834,7 @@ reads ``module_hourly(s, "transport", "net_generation", p)``; a user who sets a 
 technologies without a length). The outer-join ``UserWarning`` of ``model.solution`` then also arises on
 ``transport_tech``. In a block model ``get_net_generation`` does not list a technology that has no existing pair. The
 dual of ``operation_transport_block_{L}h_power_max_constraint`` is one value per link,
-technology, block and year, in EUR per MW of the power of the block: it is the sum of the flat twin's hourly duals over the
+technology, block and year: it is the sum of the flat twin's hourly duals over the
 block (with one binding hour, the dual of that hour), in EUR per MW of the block's power, and it is not an hourly
 price, so it is not expanded to the steps. ``module_hourly``, and so ``get_net_generation`` and
 ``plot_power`` on block models, take a dense solution: a solution of the sparse engine (pommes-kul) must be densified

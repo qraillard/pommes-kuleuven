@@ -48,6 +48,7 @@ from pommes.tests.time_blocks_helper import (
     transport_t2_short_last_block_dataset,
     transport_t2_two_lengths_dataset,
     transport_t2_fuel_emissions_dataset,
+    transport_t2_fuel_emissions_efficiency_dataset,
     transport_t2_fuel_short_last_block_dataset,
     transport_t2_fuel_supplier_emissions_dataset,
     transport_t2_fuel_uneven_steps_dataset,
@@ -780,6 +781,19 @@ def test_t2_fuel_emissions():
         assert float(abs(solved(m, name).sel(area="a")).max()) == 0.0  # the arrival area only
     assert float(solved(m, "operation_carbon_costs").sum()) > 1e-3  # the tax is paid
     assert np.nanmax(abs(m.constraints["operation_carbon_goal_area_constraint"].dual.values)) > 1e-9  # the goal binds
+
+
+def test_t2_fuel_emissions_with_efficiency():
+    """Emissions follow the fuel drawn at the departure end (``power_in``), not the power delivered: objective and emissions equal the flat twin's."""
+    p = transport_t2_fuel_emissions_efficiency_dataset()
+    m, twin = solve_model(build_model(p)), solve_model(flat_twin(p, transport={"S": 24}))
+    assert m.objective.value == pytest.approx(twin.objective.value, rel=1e-7)
+    for name in ("operation_carbon_emissions", "operation_total_carbon_emissions"):
+        assert_same(solved(m, name), solved(twin, name), name)
+    # the twin shares the emission code with the block rows: also check by hand, fuel drawn x factor x consumption
+    drawn = float(solved(m, POWER_IN24).sum()) * 24 * 0.2 + float(solved(m, "operation_transport_power_in").sel(transport_tech="H").sum()) * 0.1
+    assert float(solved(m, "operation_carbon_emissions").sum()) == pytest.approx(drawn * EMISSION_TAXED, rel=1e-6)
+    assert drawn > 0.1
 
 
 def test_t2_fuel_supplier_emissions():

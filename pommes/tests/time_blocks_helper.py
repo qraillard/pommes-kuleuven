@@ -895,6 +895,12 @@ def transport_t2_fuel_emissions_dataset() -> xr.Dataset:
     return with_blocks(p.assign(carbon_goal_area=xr.DataArray([np.nan, 2000.0], dims="area", coords={"area": p.area})), transport={"S": 24})
 
 
+def transport_t2_fuel_emissions_efficiency_dataset() -> xr.Dataset:
+    """T2: as ``t2_fuel_emissions`` without a goal, and the block ship ``S`` has an efficiency of 0.8 (``power_in`` is not ``power``)."""
+    p = _fuel_emissions(_t2_fuel([1.0] * 48, {"H": 1.5, "S": 3.0}, {"H": 0.1, "S": 0.2}, eff={"S": 0.8}))
+    return with_blocks(p, transport={"S": 24})
+
+
 def transport_t2_fuel_supplier_emissions_dataset() -> xr.Dataset:
     """T2: as ``t2_fuel_emissions`` without a goal, the hourly ``bunker`` emits 0.3 tCO2 per MWh of oil (the supplier's own factor)."""
     p = _t2_fuel([1.0] * 48, {"H": 1.5, "S": 3.0}, {"H": 0.1, "S": 0.2})
