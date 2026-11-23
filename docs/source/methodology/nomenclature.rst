@@ -34,6 +34,10 @@ Indices and Index Sets
       - ``operating_condition``
       - Operating conditions, e.g. weather years (optional coordinate: without it the model has no such dimension)
 
+    * - :math:`m \in \mathcal{M}^{tr}`
+      - ``transport_mode``
+      - Modes of the transport technologies, e.g. a blend and pure methane (optional coordinate: without it, or without a modal technology, the model has no such dimension)
+
     * - :math:`t \in \mathcal{T}`
       - ``hour``
       - Operation snapshots
@@ -327,6 +331,18 @@ Transport Parameters
       - ``transport_fuel_total_emission_factor``
       - Same, seen by the carbon goals (``operation_total_carbon_emissions``). Leave at 0 if the supplier of the fuel already carries its emissions
 
+    * - :math:`f_{\tau, m, r}`
+      - ``transport_mode_factor``
+      - MWh of resource :math:`r` that leave the "from" area per MWh of injected flow of :math:`\tau` in mode :math:`m` (default 0, ``nan`` reads as 0, values :math:`\geq 0`); the "to" area receives :math:`\eta` times that. A mode is defined when one of its factors is above 0, a technology is modal when it has a defined mode
+
+    * - :math:`\rho^{up, m}_{y, l, \tau}`
+      - ``transport_mode_ramp_up``
+      - Largest rise per hour, as a fraction of the capacity, of the difference between the flows of two modes (the first minus the second in the order of ``transport_mode``) [-]. ``nan``: no constraint
+
+    * - :math:`\rho^{down, m}_{y, l, \tau}`
+      - ``transport_mode_ramp_down``
+      - Largest fall per hour of the same difference [-]. ``nan``: no constraint. Give it the value of ``transport_mode_ramp_up`` when no asymmetry is wanted
+
     * - :math:`\gamma_{y, r, t}`
       - ``TODO``
       - Importation cost of :math:`r` in :math:`y` at :math:`t` from ROW [€/MWh]
@@ -479,6 +495,10 @@ Operation Variables
     * - :math:`\mathbf{CP}^{w}_{y, h}`
       - ``turpe_TODO !!``
       - Withdrawal contract power for electricity imports from ROW for :math:`h` [MW]
+
+    * - :math:`\mathbf X_{y, t, l, \tau, m}`
+      - ``operation_transport_mode_power_in``
+      - Power injected at the "from" end of :math:`l` by a modal technology :math:`\tau` in mode :math:`m` [MW of flow]; the modes sum to ``operation_transport_power_in``
 
     * - :math:`E^{CO_2}_{y, t}`
       - ``operation_carbon_emissions``

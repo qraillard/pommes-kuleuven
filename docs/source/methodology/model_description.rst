@@ -617,6 +617,279 @@ with the criticality of the hour: equation :eq:`progressive-turpe`.
     \mathbf{CP}^{w}_{y, h} \geq \mathbf{CP}^{w}_{y, h - 1}
     \quad \forall \, y, h
 
+.. _section-transport-modes:
+
+Transport technologies with modes
+=================================
+
+A transport technology can carry several resources on one link, for instance a methane pipe that may carry a blend of
+methane and hydrogen. The technology has **modes**: a mode is a composition (how many MWh of each resource leave the
+departure area per MWh of flow). The model chooses, hour by hour, how much flow goes in each mode. One capacity is shared
+by all the modes. Without a modal technology (no coordinate ``transport_mode``, or no factor above 0) the model is
+exactly that of 0.8.0+kul: no variable and no constraint is added, and the LP file is the same byte for byte.
+
+Inputs
+------
+
+- The optional coordinate ``transport_mode`` (labels of the modes of all the technologies), declared in the study config
+  under ``coords`` like ``operating_condition``: ``values: ["blend", "methane"]``. **The order of the labels is the order
+  of the modes** (see below).
+- ``transport_mode_factor[transport_tech, transport_mode, resource]`` (default 0, ``nan`` reads as 0, values
+  :math:`\geq 0`): :math:`f_{\tau, m, r}`, MWh of resource :math:`r` that leave the "from" area per MWh of injected flow
+  :math:`P^{in}` of technology :math:`\tau` in mode :math:`m`. The "to" area receives :math:`\eta` times that
+  (``transport_efficiency``). A factor has no link, area, year or hour: the composition of a mode is the same on every
+  link where the technology exists. A dimension may be missing from the factor (it is broadcast); another one is refused.
+- ``transport_mode_ramp_up[link, transport_tech, year_op]`` and ``transport_mode_ramp_down[link, transport_tech,
+  year_op]`` (default ``nan``, no constraint): :math:`\rho^{up}`, :math:`\rho^{down}`, the largest change per hour, as a
+  fraction of the capacity, of the difference between the flows of two modes. Read only for modal technologies.
+- ``transport_resource`` stays the *main* resource of a link: it decides where the (link, technology) pair exists and
+  must have a positive factor in some mode (refusal R17).
+
+A mode :math:`m` is *defined* for :math:`\tau` when one of its factors is above 0, and :math:`\tau` is *modal*
+(:math:`\tau \in \mathcal{K}^{m}`) when it has a defined mode. One defined mode alone is allowed (a fixed blend). A mode
+may be defined for some technologies and not for others.
+
+Variable and constraints
+------------------------
+
+For a modal technology :math:`\tau`, the variable :math:`\mathbf X_{l, \tau, m, t, y}`
+(``operation_transport_mode_power_in``, MW of injected flow, :math:`\geq 0`) is the power injected at the "from" end of
+link :math:`l` in mode :math:`m`. It lives on the modal technologies only and on the existing pairs and defined modes.
+:math:`\mathbf{P}`, :math:`\mathbf{P}^{in}` and :math:`\mathbf{NG}` are ``operation_transport_power`` (withdrawn at the
+"to" end), ``operation_transport_power_in`` and ``operation_transport_net_generation``; :math:`\mathrm{cap}` is
+``operation_transport_power_capacity``.
+
+The modes are tied to the total injected flow (``operation_transport_mode_power_in_def``):
+
+.. math::
+    :label: transport-mode-tie
+
+    \sum_{m} \mathbf X_{l, \tau, m, t, y} - \mathbf P^{in}_{l, \tau, t, y} = 0
+    \quad \forall \, l, \tau \in \mathcal{K}^{m}, t, y
+
+The net generation of every resource that the technology carries (a resource is *carried* when one of its factors is above
+0) is defined from the modes (``operation_transport_mode_net_generation_def``). It replaces
+``operation_transport_net_generation_def`` for the modal technologies:
+
+.. math::
+    :label: transport-mode-net-generation
+
+    \mathbf{NG}_{a, \tau, r, t, y} = \Delta t_t \sum_{m} f_{\tau, m, r}
+    \Big( \sum_{l : to(l) = a} \eta_{l, \tau, y} \, \mathbf X_{l, \tau, m, t, y}
+        - \sum_{l : from(l) = a} \mathbf X_{l, \tau, m, t, y} \Big)
+    \quad \forall \, a, \tau \in \mathcal{K}^{m}, r, t, y
+
+For each pair of modes :math:`(a, b)`, the first one before the second one in the coordinate, both defined for
+:math:`\tau`, with :math:`d_{t} = \mathbf X_{a, t} - \mathbf X_{b, t}` and on the hours other than the first (the ramp is
+not cyclic), where the ramp is finite:
+
+.. math::
+    :label: transport-mode-ramp-up
+
+    \frac{d_{t} - d_{t-1}}{\Delta t_t} \leq \rho^{up}_{l, \tau, y} \, \mathrm{cap}_{l, \tau, y}
+
+.. math::
+    :label: transport-mode-ramp-down
+
+    \frac{d_{t-1} - d_{t}}{\Delta t_t} \leq \rho^{down}_{l, \tau, y} \, \mathrm{cap}_{l, \tau, y}
+
+The names of the two ramps are ``operation_transport_mode_ramp_up_constraint_{i}_{j}`` and
+``operation_transport_mode_ramp_down_constraint_{i}_{j}``, where :math:`i < j` are the **zero-based positions** of the
+two modes in the coordinate ``transport_mode`` (never their labels): position 0 is the first label. Only pairs of modes
+that are defined for a technology are written, and a pair with no live cell is not written. The ramps are in capacity
+fractions per hour of the *injected* flow; at :math:`\eta = 1` this is the withdrawn flow.
+
+What the mode ramp bounds
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ramps bound the hourly change of the **difference** of the flows of two modes, in MW, by :math:`\rho \, \mathrm{cap}`.
+They do not bound the share of a mode: a ramp on the share :math:`X_a / (X_a + X_b)` is a ratio of two variables and is
+not linear, so it is not written. The ramp is a ramp on the split between two modes only while the total flow is constant.
+With :math:`\mathrm{cap} = 20` MW and :math:`\rho = 0.5` (10 MW per hour), flows written as (blend, methane):
+
+.. list-table::
+    :header-rows: 1
+
+    * - Case
+      - Flows
+      - Change of the difference
+      - Bounded
+    * - Constant total, the split switches
+      - (0, 10) then (10, 0)
+      - 20
+      - yes: two hours
+    * - One mode alone, the total rises
+      - (0, 0) then (0, 20)
+      - 20
+      - yes: two hours, with no change of mode
+    * - Both modes rise by the same amount
+      - (5, 5) then (10, 10)
+      - 0
+      - no
+
+Two consequences. A complete switch at a constant flow :math:`Q` changes the difference by :math:`2 Q`: on a full pipe,
+:math:`\rho = 2`, not 1, leaves the switch free within the hour. And the mode ramp also slows a pipe that starts or stops
+in a single mode.
+
+The order of the modes is yours
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``transport_mode_ramp_up`` and ``transport_mode_ramp_down`` follow the order of the coordinate ``transport_mode``: ``up``
+bounds how fast the first mode minus the second one can grow, ``down`` how fast it can fall. The model never sorts the
+modes, and the two inputs stay separate: you order the modes and you choose the two values. With the order
+``[blend, methane]``, the rise of ``blend`` alone is bounded by ``up`` and the rise of ``methane`` alone by ``down``. When
+no asymmetry is wanted, **give the same value to** ``transport_mode_ramp_up`` **and** ``transport_mode_ramp_down``. The
+order read from a config file is the order of its ``coords`` entry.
+
+What stays on the total flow
+----------------------------
+
+Everything else is written as without modes, on the total flows :math:`\mathbf P` and :math:`\mathbf P^{in}`, for a modal
+and a non-modal technology alike: the capacity shared by the modes (``operation_transport_power_max_constraint``:
+:math:`\mathbf P \leq \mathrm{cap} \cdot` availability), ``operation_transport_power_in_def`` (:math:`\mathbf P^{in}
+\eta = \mathbf P`), the ramp on the total flow (``transport_ramp_up``, ``transport_ramp_down``), the capacity, its bounds,
+the planning and the annuities, the fixed cost on the capacity, the hurdle cost on :math:`\mathbf P`, the fuel and its
+emissions on :math:`\mathbf P^{in}`, the retrofit and the adequacy (:math:`\mathbf{NG}` has one cell per carried
+resource). Only the existing net generation equation excludes the modal technologies, which the mode equation replaces.
+A modal technology is an hourly technology.
+
+Meaning of a flow
+-----------------
+
+The factors are free: they are not shares. For a modal pair, :math:`\mathbf X_m` is a flow of injected power, in MW of
+flow, not MW of energy. Per MW of :math:`\mathbf X_m`:
+
+- :math:`f_{\tau, m, r}` MWh of resource :math:`r` leave the "from" area and :math:`\eta f_{\tau, m, r}` arrive at the
+  "to" area;
+- the capacity and the hurdle cost count the withdrawn flow :math:`\eta \sum_m \mathbf X_m` (per MWh of injected flow the
+  capacity used is :math:`\eta`), and the fuel counts the injected flow :math:`\sum_m \mathbf X_m`;
+- :math:`F_{\tau, m} = \sum_r f_{\tau, m, r}` is the energy that leaves the "from" area per unit of injected flow.
+  :math:`F = 1` is a mode of shares. :math:`F < 1` is a loss of energy written in the matrix: the pipe moves less
+  energy than its flow, no resource holds the missing :math:`1 - F`, nothing is created and nothing is stored.
+  :math:`F > 1` is allowed and means more energy than flow. A mode that does not sum to 1 raises one warning (W1, below).
+
+*Worked example.* A methane pipe whose capacity is read in MW of methane. Mode ``methane``: :math:`f = \{methane: 1.00\}`.
+Mode ``blend``: :math:`f = \{methane: 0.90, hydrogen: 0.03\}`, so :math:`F = 0.93` (a blend of 10 % hydrogen by volume at
+equal pressure carries about 0.90 of the energy of methane in methane and 0.03 in hydrogen per unit of volume, because
+hydrogen has about 3 kWh/Nm3 against about 10 for methane). With a capacity of 20 MW, :math:`\eta = 1` and
+:math:`\mathbf X_{blend} = 10` MW, the pipe takes 10 MW of capacity and pays 10 MW of hurdle cost and fuel; it takes 9.0
+MWh/h of methane and 0.3 MWh/h of hydrogen from the departure area and delivers the same; it carries 9.3 MWh/h of energy,
+of which 3.23 % (:math:`0.03 / 0.93`) is hydrogen. To deliver 10 MWh/h of energy in this mode alone one needs
+:math:`\mathbf X = 10 / 0.93 = 10.7527` MW of flow, which still fits the 20 MW. With a capacity of 10 MW, at most 9.3
+MWh/h could be delivered.
+
+The share cap
+-------------
+
+For a modal pair at a step with flows :math:`X_m \geq 0`, the energy share of resource :math:`r` in what the pipe carries
+is :math:`s_r = \sum_m f_{m, r} X_m / \sum_m F_m X_m`. By the mediant inequality :math:`\min_m f_{m, r} / F_m \leq s_r \leq
+\max_m f_{m, r} / F_m` (over the modes with :math:`X_m > 0`), and each bound is reached by flowing in one mode only. So the
+hydrogen share is at most that of the richest mode (:math:`f_{m, h}` when :math:`F = 1`), with no constraint written for
+it. The same holds for the energy delivered, as :math:`\eta` is common.
+
+Refusals and warning
+--------------------
+
+``check_inputs`` and ``build_model`` refuse (``ValueError``), in this order after the time-block refusals, and only when
+the ``transport`` flag is on:
+
+- single resource: a transport technology that carries more than one resource of the model through
+  ``transport_resource`` on its links: ``a transport tech must carry a single resource on all its links`` (this refusal
+  also applies without modes: the dense engine used to build a wrong model in this case);
+- R18 ``transport_mode`` is a dimension of the dataset and not a coordinate: ``transport_mode is a dimension without a
+  coordinate: call assign_coords(transport_mode=[...]) first.`` (a dataset built by hand; a config that does not declare
+  the mode under ``coords`` raises a ``KeyError``);
+- R16 a factor that is negative or infinite (``nan`` reads as 0), the first one in the order technology, mode, resource:
+  ``{tech}: transport_mode_factor[{mode}, {resource}] = {value}: a factor is finite and >= 0 (NaN reads as 0).``;
+- R17 a modal technology with an existing pair whose ``transport_resource`` has no positive factor in any mode:
+  ``{tech}: transport_resource {resource} on link {link} has no positive transport_mode_factor in any mode.``;
+- R15 a modal technology with a block length (``transport_time_block_hrs``): ``{tech}: transport_time_block_hrs = {L} h:
+  a transport technology with modes cannot be a block technology.``;
+- R13 a modal technology with an existing pair whose ``transport_delay`` is not 0 (``nan`` reads as 0):
+  ``{tech}: transport_delay = {value} h on link {link}: a transport technology with modes takes no delay.``;
+- R14 a modal technology with an existing pair with a finite ``transport_linepack_capacity`` in some year:
+  ``{tech}: transport_linepack_capacity is finite on link {link}: a transport technology with modes takes no linepack.``
+
+R13, R14 and R17 name the first offending link. A modal technology is read after R16, with ``nan`` as 0.
+
+**W1, a warning.** One ``UserWarning`` lists every defined mode of a modal technology whose factors do not sum to 1
+(tolerance :math:`10^{-9}`), in the order technology, mode: ``Transport modes whose factors do not sum to 1: {tech} {mode}:
+{F:g}; {tech} {mode}: {F:g}. A flow of 1 MWh in such a mode carries that many MWh of resources.`` It also catches a resource
+name that the CSV reader dropped because it is not in the coordinate ``resource``.
+
+**Not refused:** factors whose sum is not 1 (W1 only); a mode defined for some technologies and not for others; two modes
+with the same factors; a modal technology with no existing pair (it builds no flow, and its net generation cells are
+pinned to 0); a delay or a linepack on a pair that does not exist, on a non-modal technology or on a technology whose
+factors are all 0; a block length on a non-modal technology of a dataset that has a modal one; a finite
+``transport_mode_ramp_*`` on a non-modal technology (ignored) and a negative one (unchecked, as ``transport_ramp_up``);
+modal data with ``transport`` off; a modal technology with ``transport_availability``, ``transport_ramp_*``,
+``transport_efficiency``, fuel, hurdle cost or retrofit (they act on the total flow).
+
+A linepack with modes
+---------------------
+
+A linepack on a modal technology is refused (R14): the stock of a blend cannot be written linearly on the link, since what
+leaves the pipe would have the composition of the stock. To model a linepack, add a **buffer area** between the two areas
+and link them with two modal technologies without linepack (departure area to buffer, buffer to arrival area), and put in
+the buffer area a storage of each carried resource (the stock of each resource is then a storage level).
+
+Outputs
+-------
+
+The variable ``operation_transport_mode_power_in`` is in the solution and written by ``save_solution`` (CSV with a
+``transport_mode`` column, NetCDF): a user who wants the mode of each flow reads it by name. There is no new summary.
+``get_net_generation`` lists a modal technology under each resource it carries. The plot of the costs by resource lists a
+modal technology under its main resource only. For a modal dataset ``model.solution`` has ``transport_tech`` outer-joined
+for every transport variable, with the ``UserWarning`` "Coordinates across variables not equal" (``save_solution`` silences
+it).
+
+Why we diverge from the official repository
+-------------------------------------------
+
+The official repository (pommes 0.11.0, "Transport capacity shared between resources") lets one transport technology carry
+several resources: the flow gets a ``resource`` dimension, the resources are listed in the ``transport_resource`` string
+separated by "-", and the capacity bounds the sum of the flows. We keep its idea (one capacity, free mix) as a special
+case and diverge on seven points, each for a reason:
+
+1. **Modes instead of a string.** A mode table (``transport_mode_factor``) replaces the split of a string. The official
+   model has to forbid "-" in resource names and to guard a silent truncation of the string: a resource that contained "-"
+   would split into two unknown names and the pipe would carry nothing, without a message. With a table there is no string
+   to split, so there is no restriction on resource names.
+2. **A composition per mode, so a cap on a share.** The official flow is free per resource: any mix, so no cap on the
+   hydrogen share, and a blend with at most 10 % hydrogen cannot be written. Here the blend is a mode and the share cap is
+   that of the richest mode, with no extra constraint. The free mix is the case of pure modes (below).
+3. **A ramp on mode change.** The official model states that nothing prevents the mix from changing from hour to hour, and
+   that a pipe to be purged is not represented. Here an optional ramp bounds the difference of two mode flows (default:
+   none), as the combined module does.
+4. **Free factors.** The official model counts 1 MW per MW for every resource. Here that holds when the factors of a mode
+   sum to 1; when they sum to less, the pipe carries less energy than its flow: the loss is in the matrix. A capacity
+   weight per mode is not needed. A mode that does not sum to 1 raises one warning (W1).
+5. **Efficiency, fuel, hurdle, availability, ramp, delay, linepack stay on the total flow.** The official model has none of
+   them; this model already has them and they keep their meaning for a modal technology. Delay, linepack and time blocks
+   are refused with modes until a per-mode form exists.
+6. **The flow variable.** The official model changed ``operation_transport_power`` for everybody (a ``resource``
+   dimension). Here the total keeps its name and ``operation_transport_mode_power_in`` is added for modal technologies
+   only, so that a dataset without modes keeps its LP byte for byte, and the sparse engine builds the same model.
+7. **One resource per technology on its links.** A technology that carries different resources on different links is
+   refused (the dense engine now, as the sparse engine since 0.4.1): the dense model would count the flow of every link at
+   every resource. In the official model different links may list different strings.
+
+The net generation stays a variable here and is an expression in the official model: a construction difference, not a
+formulation one.
+
+**The official model as pure modes.** With, for each carried resource :math:`r` of a technology, one pure mode
+(:math:`f_{m_r, r} = 1`, 0 elsewhere), :math:`\eta = 1`, no availability and no mode ramp, the capacity constraint is
+:math:`\sum_r X_{m_r} \leq \mathrm{cap}`, the net generation is the official expression, and the hurdle cost acts on the
+sum of the flows: the feasible set of the official model (any mix, hour by hour) is the set of :math:`X \geq 0` with
+:math:`\sum X \leq \mathrm{cap}`. The two models then give the same objective and the same flows.
+
+**Mapping an official** ``"a-b"`` **string to pure modes** (there is no converter). For each technology whose string is
+``"a-b"`` (the same on all its links), declare the modes ``pure_a`` and ``pure_b``, set ``transport_mode_factor[tech,
+pure_a, a] = 1`` and ``[tech, pure_b, b] = 1``, set ``transport_resource`` to ``a`` on every link of the technology and
+leave the ramps empty. If the strings of one technology differ by link (``"a-b"`` on one, ``"a"`` on another), make one
+technology per distinct string, since a mode belongs to a technology and not to a link. A string without "-" is a plain
+technology: do not turn it into a one-mode technology.
+
 .. _section-time-blocks:
 
 Time blocks (multi-resolution time steps)
@@ -657,7 +930,8 @@ factor, a storage, a transport (or its fuel), a process. Net imports, flexible d
 spillage are not counted: they follow the balance. The length of the balance of a resource is
 
 1. hourly if it has a counted hourly contributor (storage, process, or a technology without a block length; a transport
-   technology is hourly only without a block length);
+   technology is hourly only without a block length; a modal transport technology, which cannot have a block length, is an
+   hourly contributor of every resource it carries);
 2. otherwise the smallest block length among its counted block contributors (every other one must be a multiple of it);
 3. otherwise hourly.
 
@@ -723,7 +997,8 @@ annuity and retrofit rows are unchanged (one per unit, or per link and transport
   ``nan`` ``transport_delay`` reads as 0. Its fuel emissions (``transport_fuel_emission_factor`` and
   ``transport_fuel_total_emission_factor``) are counted in the arrival area and, like every block emission, spread over
   the steps of each block by their duration share :math:`(\Delta T)_{t}/D_L(b)`: the emission rows stay hourly and
-  equal the flat twin's step by step.
+  equal the flat twin's step by step. A transport technology with modes cannot be a block technology (R15, see
+  :ref:`section-transport-modes`).
 - **Daily production maximum.** The block length must divide the day length or be a multiple of it; the day energy of a
   flat block is then exact.
 - **Flexible demand** on a coarse resource has a block variable ``operation_flexdem_block_{L}h_demand``, an energy per
@@ -765,7 +1040,10 @@ Refused inputs
   ({L} h) takes no delay.`` Delays by whole blocks are left for a later release;
 - R12 a transport technology with a block length that has an existing pair with a finite
   ``transport_linepack_capacity`` in some year: ``{tech}: transport_linepack_capacity is finite on link {link}: a block
-  transport technology ({L} h) takes no linepack.`` Both messages name the first offending link.
+  transport technology ({L} h) takes no linepack.`` Both messages name the first offending link;
+- R15 a transport technology with modes (a modal technology, see :ref:`section-transport-modes`, which also lists R13 and
+  R14) that has a block length: ``{tech}: transport_time_block_hrs = {L} h: a transport technology with modes cannot be a
+  block technology.``
 
 A delay or a linepack on a pair that does not exist (it carries no resource), a delay on an hourly transport technology
 and a block length on a technology with no existing pair are not refused. A delay on a pair that does not exist is not
@@ -837,7 +1115,9 @@ use it, including the block load shedding and spillage and the block transport t
 reads ``module_hourly(s, "transport", "net_generation", p)``; a user who sets a transport length reads the powers with
 ``module_hourly(s, "transport", "power", p)``, the hourly variable ``operation_transport_power`` holding only the
 technologies without a length). The outer-join ``UserWarning`` of ``model.solution`` then also arises on
-``transport_tech``. In a block model ``get_net_generation`` does not list a technology that has no existing pair. The
+``transport_tech``. In a block model ``get_net_generation`` does not list a technology that has no existing pair. The variable ``operation_transport_mode_power_in`` of the
+transport technologies with modes is hourly and written by ``save_solution``; ``get_net_generation`` lists a modal
+technology under each resource it carries (see :ref:`section-transport-modes`). The
 dual of ``operation_transport_block_{L}h_power_max_constraint`` is one value per link,
 technology, block and year: it is the sum of the flat twin's hourly duals over the
 block (with one binding hour, the dual of that hour), in EUR per MW of the block's power, and it is not an hourly

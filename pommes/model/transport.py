@@ -562,6 +562,10 @@ def add_transport(
                 a store that decouples the injected and withdrawn flows.
                 Only meaningful where ``transport_linepack_capacity`` is
                 configured (not NaN).
+            - ``operation_transport_mode_power_in``
+                Only with modal technologies (see below): the power injected
+                at the "from" end by mode, on the modal technologies, the
+                existing pairs and the defined modes.
             - ``operation_transport_costs``
                 Represents operational costs associated with transport
                 technologies for each area and operational year.
@@ -594,7 +598,22 @@ def add_transport(
                 Bounds ``operation_transport_power_in`` by the same
                 capacity/availability envelope as the outflow.
             - ``operation_transport_net_generation_def``
-                Defines net energy flow for transport between different areas.
+                Defines net energy flow for transport between different areas
+                (not for the modal technologies, which have the equation
+                below).
+            - ``operation_transport_mode_power_in_def``
+                Modal technologies only: the modes sum to
+                ``operation_transport_power_in``.
+            - ``operation_transport_mode_net_generation_def``
+                Modal technologies only: the net generation of each carried
+                resource, from the factors and the flows of the modes.
+            - ``operation_transport_mode_ramp_up_constraint_{i}_{j}`` and
+              ``operation_transport_mode_ramp_down_constraint_{i}_{j}``
+                Modal technologies only, where ``transport_mode_ramp_up`` or
+                ``_down`` is finite: the hourly change of the difference of
+                the flows of the modes at the positions ``i < j`` (zero-based,
+                in the order of the coordinate ``transport_mode``), as a
+                fraction of the capacity. Not cyclic.
 
         - *Planning*
             - ``planning_transport_power_capacity_min_constraint``
@@ -646,6 +665,20 @@ def add_transport(
           applied on links with linepack. The goods in transit are the
           difference between what has left and what has arrived. An empty
           value (NaN) reads as 0.
+
+        **Technologies with modes** (optional coordinate ``transport_mode``,
+        ``transport_mode_factor`` (transport_tech, transport_mode, resource),
+        ``transport_mode_ramp_up`` and ``transport_mode_ramp_down`` (link,
+        transport_tech, year_op)): a technology is modal when a mode has a
+        factor above 0. The factor is the MWh of each resource that leave the
+        "from" area per MWh of injected flow in the mode (the "to" area gets
+        ``transport_efficiency`` times that); the modes share one capacity.
+        The capacity, availability, efficiency, ramps on the total flow,
+        fuel, hurdle and fixed costs, planning, retrofit and carbon stay on
+        the total flow. Delay, linepack and a block length are refused with
+        modes. Without a modal technology the model is exactly the 0.8.0+kul
+        model. See the section "Transport technologies with modes" of the
+        model description.
 
         These additions ensure that transport infrastructure operates within
         technical and economic limits, allowing the model to simulate energy
