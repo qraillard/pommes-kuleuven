@@ -5,6 +5,7 @@ import shutil
 import warnings
 
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
@@ -12,6 +13,7 @@ from pommes import test_case_path
 from pommes.io.build_input_dataset import build_input_parameters, load_inputs_as_dict_of_df, read_config_file
 from pommes.model.build_model import build_model
 from pommes.model.data_validation.dataset_check import check_inputs
+from pommes.tests.conditions_helper import assert_condition_dims_consistent
 from pommes.tests.time_blocks_helper import (
     BLEND,
     LEAN,
@@ -20,13 +22,30 @@ from pommes.tests.time_blocks_helper import (
     assert_same,
     solve_model,
     solved,
+    transport_modes_block_elsewhere_dataset,
+    transport_modes_carbon_dataset,
+    transport_modes_conditions_dataset,
+    transport_modes_multi_horizon_dataset,
+    transport_modes_pairless_first_dataset,
+    transport_modes_retrofit_dataset,
     transport_modes_toy,
+    transport_t2_fuel_emissions_dataset,
+    transport_t2_multi_horizon_dataset,
     _transport_t2,
     transport_toy,
+    variables_in,
     with_blocks,
     with_modes,
 )
-from pommes.utils import TransportModes, _contributors, time_blocks, transport_modal, transport_pair_exists
+from pommes.utils import (
+    OPERATING_CONDITION,
+    OPERATING_CONDITION_WEIGHT,
+    TransportModes,
+    _contributors,
+    time_blocks,
+    transport_modal,
+    transport_pair_exists,
+)
 
 NAMES = ["transport_mode_factor", "transport_mode_ramp_up", "transport_mode_ramp_down"]
 FACTOR_DIMS = ("transport_tech", "transport_mode", "resource")
@@ -739,3 +758,211 @@ def test_mode_ramp_does_not_bound_the_first_step():
     # a flow of 20 MW from the first step on: the ramp is not cyclic and has no step before it
     m = _obj(availability=[0, 0], demand=[20, 0], shed=True, ramp=(np.nan, 0.5))
     assert m.objective.value == pytest.approx(100.0, rel=1e-7)
+
+
+# --- Task 4 (step 0): the mode ramp, uneven steps, a ramp of 0, the capacity on the right-hand side, a pairless technology ---
+
+RAMP_UP_0_1 = "operation_transport_mode_ramp_up_constraint_0_1"
+
+
+def test_mode_ramp_with_uneven_steps():
+    # the ramp divides the change by the duration of the current step (2.0, 0.5 and 1.0 h), not of the previous one
+    m = _obj(dt=(2.0, 0.5, 1.0), availability=[0, 1, 1], ramp=(0.5, np.nan))
+    assert m.objective.value == pytest.approx(171.5, rel=1e-7)
+
+
+def test_mode_ramp_of_zero_freezes_the_difference():
+    # a ramp of 0 is written (it is finite) and the difference of the two modes cannot change: 100, the free case is 96
+    m = _obj(availability=[0, 1], ramp=(0.0, np.nan))
+    assert m.objective.value == pytest.approx(100.0, rel=1e-7)
+    assert _live(m, RAMP_UP_0_1) == 1
+
+
+def test_mode_ramp_right_hand_side_follows_the_capacity():
+    assert _obj(capacity=30.0, availability=[0, 1], ramp=(0.2, np.nan)).objective.value == pytest.approx(98.8, rel=1e-7)
+
+
+def test_mode_ramp_cells_of_a_technology_without_a_pair_are_not_live():
+    p = transport_modes_toy(techs=("ghost", "pipe"), modes={"ghost": BLEND, "pipe": BLEND}, order=["blend", "methane"], ramp=(0.5, 0.5))
+    p = p.assign(transport_resource=_resource(p, nan=[("ab", "ghost")]))
+    m = build_model(p)
+    for way in ("up", "down"):
+        labels = m.constraints[f"operation_transport_mode_ramp_{way}_constraint_0_1"].labels
+        live = (labels != -1).any([d for d in labels.dims if d != "transport_tech"])
+        assert live.sel(transport_tech="pipe").item() and not live.sel(transport_tech="ghost").item()
+        assert int(live.sum()) == 1  # the technologies with a pair
+
+
+def test_pairless_modal_technology_first_in_the_model_order():
+    p = transport_modes_pairless_first_dataset()
+    assert list(p.transport_tech.values) == ["ghost", "pipe"] and not transport_pair_exists(p).sel(transport_tech="ghost").any()
+    m = _solve(p)
+    assert m.objective.value == pytest.approx(92.0, rel=1e-7)
+    np.testing.assert_allclose(_net(m, "h2", tech="ghost").values, 0.0, atol=1e-9)
+    # the flows by mode of pipe are those of the plain blend toy, whose modes are ghost-free
+    twin = _solve(transport_modes_toy(modes=BLEND, order=["blend", "methane", "hydrogen"]))
+    flow = _flow(m)
+    assert_same(flow.sel(transport_mode=["blend", "methane"]), _flow(twin).sel(transport_mode=["blend", "methane"]))
+    np.testing.assert_allclose(flow.sel(transport_mode="hydrogen").fillna(0).values, 0.0, atol=1e-9)  # not defined for pipe: no cell
+    for resource in ("h2", "ch4"):
+        assert_same(_net(m, resource), _net(twin, resource), resource)
+
+
+# --- Task 4: the whole model: conditions, years, retrofit, blocks elsewhere, outputs, carbon ---
+
+
+def test_operating_conditions_with_modes():
+    p = transport_modes_conditions_dataset()
+    both = _solve(p)
+    flow = both.variables[MODE_FLOW]
+    assert OPERATING_CONDITION in flow.labels.dims
+    assert_condition_dims_consistent(both)
+
+    def only(weights):
+        return p.assign({OPERATING_CONDITION_WEIGHT: p[OPERATING_CONDITION_WEIGHT].copy(data=weights)})
+
+    a, b = _solve(only([1.0, np.nan])), _solve(only([np.nan, 1.0]))
+    assert both.objective.value == pytest.approx(0.4 * a.objective.value + 0.6 * b.objective.value, rel=1e-7)
+    assert a.objective.value == pytest.approx(98.0, rel=1e-7)
+    # the mask follows condition_mask: a condition without a weight has no cell of the flow, the tie, the net generation, the ramps
+    for m, absent in ((a, "b"), (b, "a")):
+        for name in (MODE_FLOW, "operation_transport_mode_power_in_def", "operation_transport_mode_net_generation_def", RAMP_UP_0_1):
+            labels = m.constraints[name].labels if name in m.constraints else m.variables[name].labels
+            assert (labels.sel({OPERATING_CONDITION: absent}) == -1).all(), (name, absent)
+            assert (labels.sel({OPERATING_CONDITION: "a" if absent == "b" else "b"}) != -1).any(), name
+    # the mode ramp binds in both conditions: without it the objective is lower
+    free = _solve(p.drop_vars(["transport_mode_ramp_up", "transport_mode_ramp_down"]))
+    assert free.objective.value < both.objective.value - 1e-6
+    # each condition has its own flows by mode
+    x = solved(both, MODE_FLOW)
+    assert not np.allclose(x.sel({OPERATING_CONDITION: "a"}).fillna(0), x.sel({OPERATING_CONDITION: "b"}).fillna(0))
+
+
+def test_multi_horizon_with_modes():
+    plain = transport_t2_multi_horizon_dataset()
+    _twin(plain, as_modal(plain, ["H"]))  # one mode, factor 1: the plain technology, with investment and early decommissioning
+    p = transport_modes_multi_horizon_dataset()
+    m = _solve(p)
+    flow = solved(m, MODE_FLOW).sel(transport_tech="H")
+    power = solved(m, "operation_transport_power").sel(transport_tech="H")
+    eta = p.transport_efficiency.sel(transport_tech="H")
+    assert float(eta.sel(year_op=2030).min()) == pytest.approx(0.9) and float(eta.sel(year_op=2040).min()) == pytest.approx(0.85)
+    for year in (2030, 2040):
+        # both modes are used in each year; P = eta(year) * the injected flow
+        assert float(flow.sel(year_op=year, transport_mode="mix").sum()) > 1e-3
+        assert (float(flow.sel(year_op=year, transport_mode="cargo").sum()) > 1e-3) == (year == 2030)  # H is full of mix in 2040
+        want = eta.sel(year_op=year) * flow.sel(year_op=year).sum("transport_mode")
+        assert_same(power.sel(year_op=year), want)
+        # the net generation of oil at b has the arrival side eta of the year and the factor 0.1
+        net = solved(m, NET).sel(transport_tech="H", resource="oil", year_op=year)
+        expected = 0.0
+        for link in p.link.values:
+            expected += (0.1 * eta.sel(link=link, year_op=year) * flow.sel(link=link, year_op=year, transport_mode="mix").sum()).item() * (
+                p.transport_area_to.sel(link=link, transport_tech="H").item() == "b"
+            )
+        assert float(net.sel(area="b").sum()) == pytest.approx(expected, rel=1e-7)
+    # the mode ramps by operation year: up in 2030, down in 2040 only
+    built = m.constraints
+    for way, year, other in (("up", 2030, 2040), ("down", 2040, 2030)):
+        labels = built[f"operation_transport_mode_ramp_{way}_constraint_0_1"].labels
+        live = (labels != -1).any([d for d in labels.dims if d != "year_op"])
+        assert live.sel(year_op=year).item() and not live.sel(year_op=other).item(), way
+
+
+def test_retrofit_plain_to_modal():
+    p = transport_modes_retrofit_dataset()
+    m = _solve(p)
+    transfer = solved(m, "planning_retrofit_transport_power_capacity")
+    assert float(transfer.sum()) > 1e-3  # the transfer from the plain source H to the modal target S is live and positive
+    host = m.constraints["operation_transport_power_capacity_def"]
+    assert list(host.labels.indexes["transport_tech"]) == ["H", "S"] and (host.labels != -1).any()
+    assert "planning_retrofit_transport_power_capacity" in variables_in(m, host)
+    assert float(solved(m, MODE_FLOW).sel(transport_tech="S", year_op=2040).sum()) > 1e-3
+    # one mode, factor 1 on the target: the plain-target twin
+    plain = p.drop_vars(["transport_mode_factor", "transport_mode"], errors="ignore")
+    a, b = _twin(plain, as_modal(plain, ["S"]))
+    assert_same(solved(a, "planning_retrofit_transport_power_capacity"), solved(b, "planning_retrofit_transport_power_capacity"), "transfer")
+    assert float(solved(a, "planning_retrofit_transport_power_capacity").sum()) > 1e-3
+    assert b.objective.value == pytest.approx(a.objective.value, rel=1e-7)
+
+
+def test_block_conversion_elsewhere():
+    p = transport_modes_block_elsewhere_dataset()
+    with pytest.warns(UserWarning, match=re.escape("h2: hourly because of transport tech pipe")):
+        tb = time_blocks(p)
+    assert np.isnan(tb.resource_length.sel(resource="h2").item())
+    m = _solve(p)
+    assert any("_block_" in name for name in m.variables)  # the conversion blocks are really built
+    twin = _solve(with_blocks(p))  # the hourly twin: no block length at all
+    assert not any("_block_" in name for name in twin.variables)
+    assert m.objective.value == pytest.approx(twin.objective.value, rel=1e-7)
+    assert m.objective.value == pytest.approx(1104.0, rel=1e-7)
+    assert_same(solved(m, MODE_FLOW), solved(twin, MODE_FLOW), MODE_FLOW)
+
+
+OUTER_JOIN = "Coordinates across variables not equal"
+
+
+def test_outputs(tmp_path):
+    from pommes.io.calculate_summaries import calculate_total_of_a_type, generate_summary_dataframes_from_results
+    from pommes.io.read_solution import read_solution
+    from pommes.io.save_solution import save_solution
+    from pommes.post_process import get_capacities, get_net_generation
+
+    # the toy with the blend: the flow by mode makes the round trip, NetCDF and CSV
+    p = transport_modes_toy(modes=BLEND)
+    m = _solve(p)
+    solution = m.solution.copy(deep=True)
+    save_solution(m, str(tmp_path / "out"), export_csv=True, save_input=False)
+    saved = xr.open_dataset(tmp_path / "out" / "solution.nc")
+    assert saved[MODE_FLOW].dims == solution[MODE_FLOW].dims
+    xr.testing.assert_allclose(saved[MODE_FLOW], solution[MODE_FLOW])
+    read = read_solution(str(tmp_path / "out" / "variables"))
+    assert "transport_mode" in read[MODE_FLOW].dims and list(read[MODE_FLOW].transport_mode.values) == ["blend", "methane"]
+    got, ref = read[MODE_FLOW].to_series().dropna(), solution[MODE_FLOW].to_series().dropna()
+    ref = ref.reorder_levels(got.index.names).sort_index()
+    assert got.sort_index().index.equals(ref.index)
+    np.testing.assert_allclose(got.sort_index().values, ref.values, rtol=1e-9, atol=1e-9)
+    assert got.sum() == pytest.approx(20.0)
+    # get_net_generation lists the modal technology under each carried resource
+    net = get_net_generation(solution, p)
+    pipe = net.sel(category="pipe")
+    np.testing.assert_allclose(pipe.sel(resource="h2", area="b").values.ravel(), [1, 1], atol=1e-6)
+    np.testing.assert_allclose(pipe.sel(resource="ch4", area="b").values.ravel(), [9, 9], atol=1e-6)
+    # no summary has a column for the mode, and no new name looks like a 1:1 existing one
+    for kind in ("power_capacity", "net_generation", "costs"):  # the toy has no carbon: no emissions table
+        table = calculate_total_of_a_type(kind, solution, p, "operation", True, False)
+        assert "transport_mode" not in table.index.names and "transport_mode" not in table.columns
+    carbon = transport_modes_carbon_dataset()
+    s_carbon = _solve(carbon).solution
+    for name, frame in generate_summary_dataframes_from_results(s_carbon, carbon).items():
+        assert "transport_mode" not in list(getattr(frame, "index", pd.Index([])).names) + list(getattr(frame, "columns", [])), name
+        assert "transport_mode" not in getattr(frame, "dims", ()), name
+    plain = build_model(p.drop_vars(["transport_mode_factor", "transport_mode"]))
+    assert set(m.variables) - set(plain.variables) == {MODE_FLOW}
+    assert not any(n.endswith(("_power_capacity", "_net_generation", "_costs", "_emissions")) for n in set(m.variables) - set(plain.variables))
+    # technologies ["Z", "A"]: the solution sorts transport_tech, the readers give the plain twin's tables
+    base = _transport_t2([1.0] * 6, {"Z": 1.5, "A": 2.0}, techs=("Z", "A"))
+    modal, twin = _solve(as_modal(base, ["Z"])), _solve(base)  # A stays plain: the flow by mode lives on Z only
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        s_modal, s_twin = modal.variables.solution, twin.variables.solution
+    assert any(OUTER_JOIN in str(w.message) for w in caught)  # the warning is raised, and the readers do not fail on it
+    assert list(s_twin["operation_transport_power"].transport_tech.values) == ["Z", "A"]
+    assert list(s_modal["operation_transport_power"].transport_tech.values) == ["A", "Z"]  # outer-joined and sorted
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=OUTER_JOIN)
+        for reader in (get_capacities, get_net_generation):
+            a, b = reader(s_modal, as_modal(base, ["Z"])), reader(s_twin, base)
+            assert float(abs(b).sum()) > 1e-3
+            assert_same(a, b, reader.__name__)
+
+
+def test_one_mode_factor_one_is_the_plain_technology_carbon():
+    plain, modal = transport_t2_fuel_emissions_dataset(), transport_modes_carbon_dataset()
+    a, b = _solve(plain), _solve(modal)
+    assert b.objective.value == pytest.approx(a.objective.value, rel=1e-7)
+    for name in ("operation_carbon_emissions", "operation_total_carbon_emissions"):
+        assert float(abs(solved(a, name)).sum()) > 1e-3  # the fuel emits: the comparison is not vacuous
+        assert_same(solved(a, name), solved(b, name), name)
+    assert_same(solved(a, "operation_transport_power_in"), solved(b, "operation_transport_power_in"), "power_in")

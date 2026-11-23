@@ -2192,3 +2192,186 @@ def transport_modes_toy(dt=(1.0, 1.0), **kw) -> xr.Dataset:
         if name not in ds.variables:
             ds[name] = np.array(spec["default"], dtype=spec["type"])
     return ds
+
+
+# --- Transport technologies with modes: the whole-model builders (section 8.4) ---
+
+MIX = {"cargo": {"cargo": 1.0}, "mix": {"cargo": 0.9, "oil": 0.1}}  # a ship that carries cargo, or cargo with some oil
+
+
+def _oil_at_b(p: xr.Dataset, demand: float = 0.1) -> xr.Dataset:
+    """
+    ``p`` (a ``transport_toy`` family dataset) with an oil demand of ``demand`` MW at ``b`` that only a mode with oil can serve.
+
+    Oil may be shed at 8 (cargo: 4), and the bunker cannot make oil at ``b`` (its capacity max is 0 there), so the oil
+    comes from ``a`` and the mode ``mix`` (0.9 cargo, 0.1 oil per MW of flow) beats ``cargo`` while the oil demand is not met.
+    """
+    values = p.demand.transpose("area", "hour", "resource", "year_op").values.copy()
+    values[1, :, 2, :] = demand * p.time_step_duration.values[:, None]
+    cap = p.conversion_power_capacity_max.copy()
+    cap.loc[dict(area="b", conversion_tech="bunker")] = 0.0
+    return p.assign(
+        demand=p.demand.copy(data=values),
+        conversion_power_capacity_max=cap,
+        load_shedding_max_capacity=("resource", [0.0, 50.0, 50.0]),
+        load_shedding_cost=("resource", [0.0, 4.0, 8.0]),
+    )
+
+
+def _modal_ships(dt, caps, modal: dict, techs=("H", "S"), order=None, ramp=None, **kw) -> xr.Dataset:
+    """``_transport_t2`` with the oil demand of ``_oil_at_b`` and the technologies of ``modal`` ({tech: mode table}) modal."""
+    p = _oil_at_b(_transport_t2(dt, caps, techs=techs, **kw))
+    return with_modes(p, modal, order, ramp)
+
+
+def transport_modes_share_cap_dataset() -> xr.Dataset:
+    """The hand toy of 6.3 with the blend: the richest mode caps the hydrogen share (objective 92)."""
+    return transport_modes_toy(modes=BLEND)
+
+
+def transport_modes_free_factors_dataset() -> xr.Dataset:
+    """The lean mode (0.90 ch4 and 0.03 h2 per MW of flow), capacity 10, heat shedding at 100: the capacity counts the flow."""
+    return transport_modes_toy(modes=LEAN, capacity=10.0, shed=True)
+
+
+def transport_modes_efficiency_dataset() -> xr.Dataset:
+    """The blend with ``eta`` 0.9, a fuel burnt on the injected flow (0.1 MWh of ch4 per MWh) and a hurdle cost of 0.3 per MWh withdrawn."""
+    p = transport_modes_toy(modes=BLEND, eta=0.9)
+    shape = (1, 1, 1)
+    return p.assign(
+        transport_hurdle_costs=(("link", "transport_tech", "year_op"), np.full(shape, 0.3)),
+        transport_fuel_consumption=(("link", "transport_tech", "year_op"), np.full(shape, 0.1)),
+        transport_fuel_resource=(("link", "transport_tech"), np.full((1, 1), "ch4")),
+    )
+
+
+def transport_modes_ramp_up_dataset() -> xr.Dataset:
+    """The blend, the order ``blend``, ``methane``, the electrolyser available in the second step only, ``up`` 0.5 (objective 98; 96 without the ramp)."""
+    return transport_modes_toy(modes=BLEND, order=["blend", "methane"], availability=[0, 1], ramp=(0.5, np.nan))
+
+
+def transport_modes_ramp_down_dataset() -> xr.Dataset:
+    """The mirror of ``ramp_up``: the electrolyser available in the first step only, ``down`` 0.5 (objective 98)."""
+    return transport_modes_toy(modes=BLEND, order=["blend", "methane"], availability=[1, 0], ramp=(np.nan, 0.5))
+
+
+def transport_modes_three_modes_dataset() -> xr.Dataset:
+    """
+    Two modal pipes of capacity 10, a heat demand of 25 that they cannot serve (shedding at 100), mode ramps 0.5 both ways.
+
+    ``pipe`` defines ``blend`` and ``methane``, ``pipe2`` defines ``blend``, ``methane`` and ``pure_h2``; the hurdle costs
+    differ (0.02 and 0.01), so ``pipe2`` carries hydrogen alone and ``pipe`` the blend: 3 position pairs, two technologies.
+    """
+    p = transport_modes_toy(
+        techs=("pipe", "pipe2"),
+        modes={"pipe": BLEND, "pipe2": {**BLEND, "pure_h2": {"h2": 1.0}}},
+        order=["blend", "methane", "pure_h2"],
+        ramp=(0.5, 0.5),
+        capacity=10.0,
+        demand=25.0,
+        shed=True,
+    )
+    return p.assign(transport_hurdle_costs=(("link", "transport_tech", "year_op"), np.array([[[0.02], [0.01]]])))
+
+
+def _pairless(p: xr.Dataset, link: str, tech: str) -> xr.Dataset:
+    """``p`` with no pair (``transport_resource`` NaN) for ``tech`` on ``link``."""
+    resource = p.transport_resource.copy()
+    resource.loc[dict(link=link, transport_tech=tech)] = "nan"
+    return p.assign(transport_resource=resource)
+
+
+def transport_modes_pairless_first_dataset() -> xr.Dataset:
+    """A modal ``ghost`` without a pair comes first in the model order, with factors other than those of the flowing ``pipe`` (objective 92)."""
+    p = transport_modes_toy(
+        techs=("ghost", "pipe"), modes={"ghost": PURE, "pipe": BLEND}, order=["blend", "methane", "hydrogen"]
+    )
+    return _pairless(p, "ab", "ghost")
+
+
+def transport_modes_unsorted_dataset() -> xr.Dataset:
+    """
+    Ships ``Z``, ``A``, ``H`` (not alphabetical), links ``["ba", "ab"]``, modes ``["methane", "mix"]`` in the user's order.
+
+    ``Z`` and ``A`` are modal (``mix`` carries oil: the oil demand of ``_oil_at_b``), ``H`` is a plain ship that runs on
+    the other ends than ``Z`` (module with endpoint groups), ``A`` has no pair (its net generation is pinned to 0).
+    """
+    p = _oil_at_b(_transport_t2([1.0] * 6, {"Z": 1.5, "A": 2.0, "H": 0.8}, techs=("Z", "A", "H")))
+    ends = {"transport_area_from": "transport_area_to", "transport_area_to": "transport_area_from"}
+    swapped = {name: p[other].sel(transport_tech="Z") for name, other in ends.items()}
+    p = p.assign({name: p[name].where(p.transport_tech != "H", swapped[name]) for name in ends})
+    p = _pairless(p, "ab", "A")
+    p = _pairless(p, "ba", "A")
+    own = {"methane": {"cargo": 1.0}, "mix": {"cargo": 0.8, "oil": 0.2}}
+    p = with_modes(p, {"Z": {"methane": {"cargo": 1.0}, "mix": MIX["mix"]}, "A": own}, ["methane", "mix"])
+    return p.sel(link=["ba", "ab"])
+
+
+def transport_modes_two_ends_dataset() -> xr.Dataset:
+    """
+    Two modal ships ``Z`` and ``B`` whose link ends are opposite (``B`` runs ``b`` to ``a`` on ``ab``).
+
+    ``B`` loses less cargo per unit of oil in its mix (0.15 for 0.2, ``Z``: 0.1 for 0.1) and is too small (0.4 MW) to
+    serve the oil demand (0.1 MW) alone: ``B`` carries ``mix`` only and ``Z`` both modes.
+    """
+    mix_b = {"cargo": {"cargo": 1.0}, "mix": {"cargo": 0.85, "oil": 0.2}}
+    return _modal_ships([1.0] * 6, {"Z": 1.5, "B": 0.4}, {"Z": MIX, "B": mix_b}, techs=("Z", "B"), order=["cargo", "mix"])
+
+
+def transport_modes_conditions_dataset() -> xr.Dataset:
+    """
+    The ramp toy under two operating conditions (weights 0.4 and 0.6): ``a`` has the electrolyser in the second step
+    only (the ramp up binds), ``b`` in the first only with a demand of 12 (the ramp down binds); mode ramps 0.5 both ways.
+    """
+    kw = dict(modes=BLEND, order=["blend", "methane"], ramp=(0.5, 0.5))
+    a = transport_modes_toy(availability=[0, 1], **kw)
+    b = transport_modes_toy(availability=[1, 0], demand=12.0, **kw)
+    return with_conditions(
+        a, [0.4, 0.6], conversion_availability=[a.conversion_availability, b.conversion_availability], demand=[a.demand, b.demand]
+    )
+
+
+def _blend_on_h(p: xr.Dataset, eta=(0.9, 0.85), up=(0.5, np.nan), down=(np.nan, 0.4)) -> xr.Dataset:
+    """``p`` (the multi-year ships) with the ship ``H`` modal (``MIX``), an efficiency ``eta`` and the mode ramps per ``year_op``."""
+    efficiency = p.transport_efficiency.copy()
+    for year, value in zip(p.year_op.values, eta):
+        efficiency.loc[dict(transport_tech="H", year_op=year)] = value
+    p = p.assign(transport_efficiency=efficiency)
+    p = with_modes(_oil_at_b(p), {"H": MIX}, ["cargo", "mix"], ramp={"H": (0.0, 0.0)})
+    for name, values in (("transport_mode_ramp_up", up), ("transport_mode_ramp_down", down)):
+        ramp = xr.full_like(p[name], np.nan)
+        for year, value in zip(p.year_op.values, values):
+            ramp.loc[dict(transport_tech="H", year_op=year)] = value
+        p[name] = ramp
+    return p
+
+
+def transport_modes_multi_horizon_dataset() -> xr.Dataset:
+    """``transport_t2_multi_horizon_dataset`` with the hourly ship ``H`` modal (``MIX``), ``eta`` 0.9 then 0.85, ``up`` in 2030 and ``down`` in 2040."""
+    return _blend_on_h(transport_t2_multi_horizon_dataset())
+
+
+def transport_modes_retrofit_dataset() -> xr.Dataset:
+    """
+    ``transport_t2_retrofit_dataset`` with the target ``S`` hourly and modal (``MIX``, efficiency 0.8): ``H`` is the plain
+    source, the bounds of that builder pin the investment and the transfer (a retrofit of ``H`` into ``S`` in 2040).
+    """
+    p = with_blocks(transport_t2_retrofit_dataset())  # S is hourly: a modal technology cannot be a block technology
+    return with_modes(_oil_at_b(p), {"S": MIX}, ["cargo", "mix"])
+
+
+def transport_modes_block_elsewhere_dataset() -> xr.Dataset:
+    """The blend pipe, hourly, on 24 steps; the h2 producer and consumer are on 24 h blocks (``h2`` is hourly because of the pipe: C8)."""
+    p = transport_modes_toy(dt=(1.0,) * 24, modes=BLEND)
+    return with_blocks(p, conversion={"electrolyser": 24, "boiler_h2": 24})
+
+
+def transport_modes_split_module_dataset() -> xr.Dataset:
+    """The modal hourly ship ``H`` (``MIX``, efficiency 0.9) and the block ship ``S`` (24 h, efficiency 0.8): the transport module is split."""
+    p = _modal_ships([1.0] * 48, {"H": 1.5, "S": 3.0}, {"H": MIX}, order=["cargo", "mix"], eff={"H": 0.9, "S": 0.8})
+    return with_blocks(p, transport={"S": 24})
+
+
+def transport_modes_carbon_dataset() -> xr.Dataset:
+    """``transport_t2_fuel_emissions_dataset`` (fuel emission factors, a tax, a goal) with the hourly ship ``H`` modal (one mode, factor 1)."""
+    return as_modal(transport_t2_fuel_emissions_dataset(), ["H"])
