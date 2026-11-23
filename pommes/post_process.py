@@ -177,9 +177,11 @@ def get_capacities(
         da = da.copy(deep=True)
         da = da.rename(None)
         da = da.expand_dims(capacity_type=np.array(["power"], dtype=str))
+        # the ends by label: the solution's transport_tech axis is sorted when the module is split
+        ends = dict(link=da.link, transport_tech=da.transport_tech)
         da = da.assign_coords(
-            area_from=(["link", "transport_tech"], p.transport_area_from.data),
-            area_to=(["link", "transport_tech"], p.transport_area_to.data),
+            area_from=(["link", "transport_tech"], p.transport_area_from.sel(ends).transpose("link", "transport_tech").data),
+            area_to=(["link", "transport_tech"], p.transport_area_to.sel(ends).transpose("link", "transport_tech").data),
         )
         da_imports = da.groupby(["area_from", "transport_tech"]).sum()
         da_imports = da_imports.expand_dims(

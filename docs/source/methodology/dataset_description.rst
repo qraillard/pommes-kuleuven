@@ -35,7 +35,7 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
     * - resource_time_block_hrs
       - Forces the block length [h] of a resource balance. ``nan``: derived from the technologies that can move the resource (hourly if any is hourly or a storage, a process or a transport technology without a block length).
     * - conversion_time_block_rule
-      - ``min`` (default) or ``mean``: the block availability is the minimum or the duration-weighted mean of the step availabilities. Read only for block technologies.
+      - ``min`` (default) or ``mean``: the block availability is the minimum or the duration-weighted mean of the step availabilities. Read only for block conversion technologies (a transport technology always uses the minimum).
 
 Without these five parameters the model is exactly that of 0.7.1+kul. See the time blocks section of the model description.
 

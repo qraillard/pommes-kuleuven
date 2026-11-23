@@ -83,9 +83,11 @@ def reindex_by_area(
     indexes = list(dataset.coords)
     indexes_without_link = [x for x in indexes if x != "link"]
     if "transport_tech" in transport_area_from.coords:
+        # the ends by label: the solution's transport_tech axis is sorted when the module is split
+        ends = dict(link=dataset.link, transport_tech=dataset.transport_tech)
         reindexed_dataset = dataset.assign_coords(
-            area_from=(["link", "transport_tech"], transport_area_from.data),
-            area_to=(["link", "transport_tech"], transport_area_to.data),
+            area_from=(["link", "transport_tech"], transport_area_from.sel(ends).transpose("link", "transport_tech").data),
+            area_to=(["link", "transport_tech"], transport_area_to.sel(ends).transpose("link", "transport_tech").data),
         )
     else:
         reindexed_dataset = dataset.assign_coords(

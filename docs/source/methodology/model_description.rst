@@ -526,7 +526,8 @@ non-zero factor, so without the parameters (or at 0, or NaN) the model is unchan
 carries its emissions (an emission factor on the conversion that produces it, or on its import), leave these factors at
 0, or the emissions are counted twice. When ``transport_fuel_resource`` is not a resource of the model, no balance is
 drawn from and the factors still apply to the consumption, so a study can count the emissions of a fuel it does not
-model.
+model. A block transport technology spreads its fuel emissions over the steps of its block (see the Time blocks
+section).
 
 The total emission constraint is in equation :eq:`emission-max`.
 
@@ -766,7 +767,9 @@ Refused inputs
   transport technology ({L} h) takes no linepack.`` Both messages name the first offending link.
 
 A delay or a linepack on a pair that does not exist (it carries no resource), a delay on an hourly transport technology
-and a block length on a technology with no existing pair are not refused. R4 names the transport technology
+and a block length on a technology with no existing pair are not refused. A delay on a pair that does not exist is not
+refused by R11, but the model still needs uniform time steps as soon as any ``transport_delay`` is positive, as before
+(the check reads every cell). R4 names the transport technology
 (``transport tech {name}``). R5, R9 and R10 also apply to balances that are coarse only because of block transport
 technologies.
 
@@ -786,7 +789,8 @@ equality forcing the power to be constant inside each block.
     * - Block technology, every resource hourly
       - exact against the flat twin (power maximum with rule ``min``, must-run where the availability is constant in
         each block, ramps, constant operation, annual sums, daily rule; for a transport technology: power maximum with
-        rule ``min``, efficiency, fuel, hurdle costs, ramps)
+        rule ``min``, efficiency, fuel, hurdle costs, ramps; for a transport technology only with an efficiency
+        above 0, since at 0 the block model is a restriction (the injected flow is held flat), and ramps of 0 or more)
     * - Must-run on an availability that varies inside a block
       - relaxation (the block rows use :math:`\bar A_b`; the block objective is at most the twin's)
     * - Availability rule ``mean``

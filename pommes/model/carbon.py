@@ -331,7 +331,7 @@ def add_carbon(
         # Fuel burnt by the links (tCO2 per MWh of fuel), counted in the arrival area of the link at the injection step,
         # whatever transport_fuel_area is. Each row gets its term only if a pair of the group burns fuel with a non-zero
         # factor. The hourly group as always; a block group as tCO2 per block (Pin_b x burnt x D_b) spread over its hours.
-        for L, p_g, _ in transport_groups(p, tb):
+        for L, p_g, _ in transport_groups(p, tb, availability=False):
             power_in = v[f"{block_prefix('transport', L)}power_in"]
             labels = v.operation_transport_power_capacity.labels.sel(
                 transport_tech=p_g.indexes["transport_tech"]

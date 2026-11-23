@@ -26,6 +26,7 @@ from pommes.tests.time_blocks_helper import (
     solved,
     taxed,
     toy_n,
+    transport_t2_fuel_emissions_dataset,
     with_blocks,
     with_carbon,
 )
@@ -206,3 +207,13 @@ def test_t0_carbon_gathers_the_same_emission_factor(parameters):
         name = f"{module}_emission_factor"
         xr.testing.assert_identical(got[name], want[name])
         assert got_idx.equals(want_idx), module  # the same units, in the same order
+
+
+def test_carbon_does_not_recompute_the_transport_block_availability(monkeypatch):
+    from pommes.model import transport
+
+    calls = []
+    real = transport.transport_block_availability
+    monkeypatch.setattr(transport, "transport_block_availability", lambda *a, **k: calls.append(a[2]) or real(*a, **k))
+    build_model(transport_t2_fuel_emissions_dataset())  # carbon on, one block group
+    assert calls == [24]  # the transport module reads it once, the carbon block does not

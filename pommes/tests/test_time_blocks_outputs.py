@@ -13,15 +13,14 @@ import pytest
 import xarray as xr
 
 import pommes
-from pommes.io.calculate_summaries import calculate_total_net_generation
+from pommes.io.calculate_summaries import calculate_total_net_generation, calculate_total_power_capacity
 from pommes.io.read_solution import read_dual, read_solution
 from pommes.io.save_solution import save_solution
 from pommes.model.build_model import build_model
-from pommes.post_process import get_net_generation, module_hourly
+from pommes.post_process import get_capacities, get_net_generation, module_hourly
 from pommes.tests.time_blocks_helper import (
     BLOCK_PARAMETERS,
     KILNS,
-    _transport_t2,
     combined_all_block_dataset,
     combined_derived_coarse_dataset,
     combined_t2_dataset,
@@ -34,7 +33,9 @@ from pommes.tests.time_blocks_helper import (
     net_import_two_lengths,
     solve_model,
     transport_all_block_dataset,
+    transport_availability_dual_dataset,
     transport_hand_toy,
+    transport_readers_dataset,
     transport_t2_availability_dataset,
     transport_t2_two_lengths_dataset,
     with_blocks,
@@ -462,7 +463,7 @@ def test_save_and_read_a_block_transport_solution(tmp_path):
 
 def test_power_max_block_dual_is_per_block():
     """One 3 h block, availability 0.5 in one step: the dual of its power_max is that of the twin's binding hour, not three times it."""
-    p = with_blocks(_transport_t2([1.0] * 3, {"S": 3.0}, techs=("S",), availability={"S": [1.0, 0.5, 1.0]}), transport={"S": 3})
+    p = with_blocks(transport_availability_dual_dataset(), transport={"S": 3})
     m, twin = solve_model(build_model(p)), solve_model(flat_twin(p, transport={"S": 3}))
     names = ("operation_transport_block_3h_power_max_constraint", "operation_transport_power_max_constraint")
     block, hourly = (read_dual_of(x, [n])[n].sel(transport_tech="S", year_op=2030) for x, n in zip((m, twin), names))
@@ -488,3 +489,29 @@ def test_toy_examples_read_the_hourly_variables():
     m = build_model(ds)
     assert "operation_transport_power" in m.variables
     assert not [v for v in m.variables if v.startswith("operation_transport_block_")]
+
+
+def _capacity_tables(p, s):
+    """The transport rows of ``get_capacities`` (by asset and area) and of ``calculate_total_power_capacity`` (by area)."""
+    cap = get_capacities(s, p)
+    cap = cap.sel(asset=[a for a in cap.indexes["asset"] if a[0].startswith("transport")])
+    cap = cap.sum([d for d in cap.dims if d not in ("asset", "area")]).to_series().dropna()
+    total = calculate_total_power_capacity(s, p, by_area=True)
+    total = total.loc[[i for i in total.index if "transport" in str(i)]].sort_index()
+    return cap.sort_index(), total
+
+
+def test_capacity_readers_follow_the_labels():
+    # m.solution sorts transport_tech once the module is split: the ends must follow the labels, not the positions
+    p = transport_readers_dataset()
+    block = with_blocks(p, transport={"Z": 24, "S": 24, "A": 24})
+    m, twin = solve_model(build_model(block)), solve_model(build_model(p))
+    assert m.objective.value == pytest.approx(twin.objective.value)  # same optimum
+    assert list(read(m).transport_tech.values) != ["Z", "H", "S", "A"]  # the axis is reordered
+    cap, total = _capacity_tables(block, read(m))
+    ref_cap, ref_total = _capacity_tables(p, read(twin))
+    assert len(ref_cap) > 4  # every ship is read at both ends
+    np.testing.assert_allclose(cap.values, ref_cap.values, atol=1e-6)
+    assert cap.index.equals(ref_cap.index)
+    assert total.index.equals(ref_total.index)
+    np.testing.assert_allclose(total.values, ref_total.values, atol=1e-6)

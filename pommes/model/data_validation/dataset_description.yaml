@@ -402,7 +402,7 @@ conversion_time_block_rule:
   index_set:
   - conversion_tech
   type: str
-  description: "How the hourly availability becomes a block value: min or mean. Read only for block technologies; nan, empty or missing read as min."
+  description: "How the hourly availability becomes a block value: min or mean. Read only for block conversion technologies (a transport technology always uses the minimum); nan, empty or missing read as min."
 conversion_variable_cost:
   default: 0
   index_set:

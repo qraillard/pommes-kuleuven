@@ -766,10 +766,10 @@ def _emissions_twin(p, L=24, idle=(("b", "oil"),)):
     m, twin = _compare_with_twin(p, {"S": L}, idle)
     for name in ("operation_carbon_emissions", "operation_total_carbon_emissions"):
         assert_same(solved(m, name), solved(twin, name), name)
-    # the oil the ships draw is made by the bunker: the fuel drawn is the same hour by hour
     # the conversion power is fixed by the optimum only as a sum over the hours (probed): compare that sum
     name = "operation_conversion_power"
     assert_same(solved(m, name).sum("hour"), solved(twin, name).sum("hour"), "conversion")
+    # the block ships do draw fuel
     assert float(solved(m, POWER_IN24 if L == 24 else f"operation_transport_block_{L}h_power_in").sum()) > 0
     return m, twin
 

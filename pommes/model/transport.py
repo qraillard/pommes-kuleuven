@@ -25,7 +25,7 @@ from pommes.utils import (
 
 
 def transport_groups(
-    p: Dataset, tb: TimeBlocks
+    p: Dataset, tb: TimeBlocks, availability: bool = True
 ) -> list[tuple[int | None, Dataset, None]]:
     """
     The groups ``(L, p_g, None)`` of the transport module.
@@ -38,6 +38,8 @@ def transport_groups(
     dimension). Without a block length on a transport technology (conversion
     blocks included) there is one group, ``(None, p, None)``, ``p`` itself.
     Transport has no unit index: the third element is always None.
+    ``availability=False`` skips ``transport_block_availability`` (a reader of the factors only, as carbon, does not
+    need it): a block group then holds neither the hourly nor the block availability.
     """
     lengths = tb.tech_length["transport"].values
     if not (tb.active and np.isfinite(lengths).any()):
@@ -55,11 +57,12 @@ def transport_groups(
             p_g = p.drop_vars("transport_availability", errors="ignore").sel(
                 transport_tech=list(part)
             )
-            p_g = p_g.assign(
-                transport_block_availability=transport_block_availability(
-                    p, tb, L, list(part)
+            if availability:
+                p_g = p_g.assign(
+                    transport_block_availability=transport_block_availability(
+                        p, tb, L, list(part)
+                    )
                 )
-            )
         out.append((L, p_g, None))
     return out
 

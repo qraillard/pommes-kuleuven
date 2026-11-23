@@ -276,6 +276,22 @@ def _transport_t2(dt, caps, techs=("H", "S"), **kw):
     return p
 
 
+def transport_readers_dataset() -> xr.Dataset:
+    """
+    Readers case: ships ``Z, H, S, A`` (not alphabetical), the link ends swapped on the odd ones, every ship capped
+    below the demand (the capacities are unique), only the link ``ab`` carries cargo. Hourly: add blocks on some techs.
+    """
+    p = _transport_t2([1.0] * 48, {"Z": 1.0, "H": 1.5, "S": 3.0, "A": 0.7}, techs=("Z", "H", "S", "A"))
+    res = p.transport_resource.copy()
+    res.loc[{"link": "ba"}] = "nothing"
+    return p.assign(transport_resource=res)
+
+
+def transport_availability_dual_dataset() -> xr.Dataset:
+    """Three hourly steps, one ship ``S`` capped at 3 MW, availability 1, 0.5, 1 (add ``transport={"S": 3}``)."""
+    return _transport_t2([1.0] * 3, {"S": 3.0}, techs=("S",), availability={"S": [1.0, 0.5, 1.0]})
+
+
 def transport_t2_efficiency_dataset() -> xr.Dataset:
     """T2: 0.8 on the link ``ba`` of the block ship ``S`` (a to b) and 1 on ``ab``; the hourly ``H`` has 0.9 on ``ab``."""
     p = _transport_t2([1.0] * 48, {"H": 1.5, "S": 3.0}, eff={"H": 0.9, "S": 0.8})
