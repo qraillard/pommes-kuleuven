@@ -510,7 +510,24 @@ def test_capacity_readers_follow_the_labels():
     assert list(read(m).transport_tech.values) != ["Z", "H", "S", "A"]  # the axis is reordered
     cap, total = _capacity_tables(block, read(m))
     ref_cap, ref_total = _capacity_tables(p, read(twin))
-    assert len(ref_cap) > 4  # every ship is read at both ends
+    assert len(ref_cap) > 4 and len(ref_total) > 0  # every ship is read at both ends; the summary is not empty
+    # the hourly reference itself, read cell by cell and by label: a ship's capacity is counted as an import at its own
+    # "from" area and as an export at its own "to" area (the reader's convention), never at the ends of another ship
+    table = {
+        (row.area, row.category, row.tech): value
+        for row, value in zip(ref_cap.index.to_frame(index=False).itertuples(), ref_cap.values)
+    }
+    capacity = read(twin).operation_transport_power_capacity.sel(link="ab").sum("year_op")
+    built = [tech for tech in p.transport_tech.values if float(capacity.sel(transport_tech=tech)) > 1e-3]
+    assert len(built) >= 2  # the ships that carry the cargo
+    for tech in built:
+        c = float(capacity.sel(transport_tech=tech))
+        ends = {k: str(p[f"transport_area_{k}"].sel(link="ab", transport_tech=tech).item()) for k in ("from", "to")}
+        assert ends["from"] != ends["to"]
+        assert table[(ends["from"], "transport_import", tech)] == pytest.approx(c)
+        assert table[(ends["to"], "transport_export", tech)] == pytest.approx(c)
+        assert table.get((ends["to"], "transport_import", tech), 0.0) == pytest.approx(0.0, abs=1e-9)
+        assert table.get((ends["from"], "transport_export", tech), 0.0) == pytest.approx(0.0, abs=1e-9)
     np.testing.assert_allclose(cap.values, ref_cap.values, atol=1e-6)
     assert cap.index.equals(ref_cap.index)
     assert total.index.equals(ref_total.index)
