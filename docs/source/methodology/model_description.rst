@@ -700,7 +700,7 @@ that are defined for a technology are written, and a pair with no live cell is n
 fractions per hour of the *injected* flow; at :math:`\eta = 1` this is the withdrawn flow.
 
 What the mode ramp bounds
-~~~~~~~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The ramps bound the hourly change of the **difference** of the flows of two modes, in MW, by :math:`\rho \, \mathrm{cap}`.
 They do not bound the share of a mode: a ramp on the share :math:`X_a / (X_a + X_b)` is a ratio of two variables and is
@@ -732,7 +732,7 @@ Two consequences. A complete switch at a constant flow :math:`Q` changes the dif
 in a single mode.
 
 The order of the modes is yours
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 ``transport_mode_ramp_up`` and ``transport_mode_ramp_down`` follow the order of the coordinate ``transport_mode``: ``up``
 bounds how fast the first mode minus the second one can grow, ``down`` how fast it can fall. The model never sorts the

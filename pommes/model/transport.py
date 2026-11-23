@@ -607,13 +607,14 @@ def add_transport(
             - ``operation_transport_mode_net_generation_def``
                 Modal technologies only: the net generation of each carried
                 resource, from the factors and the flows of the modes.
-            - ``operation_transport_mode_ramp_up_constraint_{i}_{j}`` and
-              ``operation_transport_mode_ramp_down_constraint_{i}_{j}``
+            - ``operation_transport_mode_ramp_up_constraint_{i}_{j}``
                 Modal technologies only, where ``transport_mode_ramp_up`` or
                 ``_down`` is finite: the hourly change of the difference of
                 the flows of the modes at the positions ``i < j`` (zero-based,
                 in the order of the coordinate ``transport_mode``), as a
                 fraction of the capacity. Not cyclic.
+            - ``operation_transport_mode_ramp_down_constraint_{i}_{j}``
+                Same as the ramp up, for the decrease.
 
         - *Planning*
             - ``planning_transport_power_capacity_min_constraint``
