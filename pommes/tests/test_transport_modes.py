@@ -662,6 +662,22 @@ def test_mode_ramp_up():
     np.testing.assert_allclose(flow.sel(transport_mode="methane").values[1], 5.0, atol=1e-6)
 
 
+def test_mode_ramp_reads_the_modal_technology_not_the_first_one():
+    # a plain technology comes first on the axis, with capacity 0 and a finite ramp that must be ignored
+    p = transport_modes_toy(
+        techs=("plain", "pipe"), modes={"pipe": BLEND}, order=["blend", "methane"], ramp=(0.5, np.nan), availability=[0, 1]
+    )
+    for name in ("transport_power_capacity_min", "transport_power_capacity_max"):
+        v = p[name].copy()
+        v.loc[{"transport_tech": "plain"}] = 0.0
+        p = p.assign({name: v})
+    r = p.transport_mode_ramp_up.copy()
+    r.loc[{"transport_tech": "plain"}] = 0.0
+    m = _solve(p.assign(transport_mode_ramp_up=r))
+    assert m.objective.value == pytest.approx(98.0, rel=1e-7)
+    np.testing.assert_allclose(_flow(m).sel(transport_mode="blend").values[1], 5.0, atol=1e-6)
+
+
 def test_mode_ramp_down():
     assert _obj(availability=[1, 0], ramp=(np.nan, 0.5)).objective.value == pytest.approx(98.0, rel=1e-7)
 
