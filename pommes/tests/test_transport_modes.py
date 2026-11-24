@@ -289,6 +289,12 @@ def test_w1_sum_warning():
     other = transport_modes_toy(techs=("pipe", "pipe2"), modes={"pipe": BLEND})
     assert _warning_texts(other) == []
     assert _warning_texts(p.assign(transport=np.array(False))) == []
+    # the order of the list: technology, then mode, of the dataset (not alphabetical)
+    table = {"rich": {"ch4": 1.2}, "lean": {"ch4": 0.9}}
+    ordered = transport_modes_toy(techs=("Z", "A"), modes={"Z": table, "A": table}, order=["rich", "lean"])
+    assert [t.split(". A flow")[0] for t in _warning_texts(ordered)] == [
+        "Transport modes whose factors do not sum to 1: Z rich: 1.2; Z lean: 0.9; A rich: 1.2; A lean: 0.9"
+    ]
 
 
 def test_modal_inputs_from_csv(tmp_path):
@@ -478,6 +484,12 @@ def test_share_cap_of_the_richest_mode():
         assert (h2 / (h2 + ch4) <= 0.10 + 1e-6).all()
 
 
+def _same_duals(a, b):
+    """The dual of the adequacy constraint is the same in the plain model ``a`` and in its modal twin ``b`` (spec 8.3)."""
+    name = "operation_adequacy_constraint"
+    assert_same(a.constraints[name].dual, b.constraints[name].dual, name)
+
+
 def _twin(plain, modal, rows=None):
     """The objective and the six variables of section 6.1 of ``plain`` and of its modal twin ``modal`` are equal."""
     a, b = _solve(plain), _solve(modal)
@@ -493,6 +505,7 @@ def _twin(plain, modal, rows=None):
         assert_same(solved(a, name), solved(b, name), name)
     name = "planning_transport_power_capacity"  # the split between decommissioning years is not fixed
     assert_same(solved(a, name).sum("year_dec"), solved(b, name).sum("year_dec"), name)
+    _same_duals(a, b)
     return a, b
 
 
@@ -748,6 +761,13 @@ def test_mode_ramp_pairs_of_defined_modes_only(tmp_path):
             from pommes.io.save_solution import save_solution
 
             save_solution(m, str(tmp_path / "out"), export_csv=True, save_input=False)
+            from pommes.io.read_solution import read_solution
+
+            name = "operation_transport_mode_power_in"
+            got = read_solution(str(tmp_path / "out" / "variables"))[name]
+            assert "h2/ch4" in got.transport_mode.values.tolist()
+            want = densify_any(m.solution[name])
+            assert_same(got, want, name)  # by label
 
 
 def test_mode_ramp_on_a_non_modal_technology_is_ignored():
@@ -932,15 +952,18 @@ def test_outputs(tmp_path):
     from pommes.post_process import get_capacities, get_net_generation
 
     # the toy with the blend: the flow by mode makes the round trip, NetCDF and CSV
-    p = transport_modes_toy(modes=BLEND)
+    p = transport_modes_toy(modes=BLEND, order=["methane", "blend"])  # not alphabetical
     m = _solve(p)
     solution = m.solution.copy(deep=True).map(densify_any)  # the sparse engine solves on units
     save_solution(m, str(tmp_path / "out"), export_csv=True, save_input=False)
     saved = xr.open_dataset(tmp_path / "out" / "solution.nc")
+    assert saved[MODE_FLOW].transport_mode.values.tolist() == ["methane", "blend"]
+    rows = pd.read_csv(tmp_path / "out" / "variables" / f"{MODE_FLOW}.csv", sep=";")
+    assert rows.transport_mode.drop_duplicates().tolist() == ["methane", "blend"]
     assert saved[MODE_FLOW].dims == solution[MODE_FLOW].dims
     xr.testing.assert_allclose(saved[MODE_FLOW], solution[MODE_FLOW])
     read = read_solution(str(tmp_path / "out" / "variables"))
-    assert "transport_mode" in read[MODE_FLOW].dims and list(read[MODE_FLOW].transport_mode.values) == ["blend", "methane"]
+    assert "transport_mode" in read[MODE_FLOW].dims and list(read[MODE_FLOW].transport_mode.values) == ["blend", "methane"]  # read_solution sorts every CSV coordinate
     got, ref = read[MODE_FLOW].to_series().dropna(), solution[MODE_FLOW].to_series().dropna()
     ref = ref.reorder_levels(got.index.names).sort_index()
     assert got.sort_index().index.equals(ref.index)
@@ -984,6 +1007,7 @@ def test_one_mode_factor_one_is_the_plain_technology_carbon():
     plain, modal = transport_t2_fuel_emissions_dataset(), transport_modes_carbon_dataset()
     a, b = _solve(plain), _solve(modal)
     assert b.objective.value == pytest.approx(a.objective.value, rel=1e-7)
+    _same_duals(a, b)
     for name in ("operation_carbon_emissions", "operation_total_carbon_emissions"):
         assert float(abs(solved(a, name)).sum()) > 1e-3  # the fuel emits: the comparison is not vacuous
         assert_same(solved(a, name), solved(b, name), name)

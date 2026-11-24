@@ -836,7 +836,9 @@ R13, R14 and R17 name the first offending link. A modal technology is read after
 (tolerance :math:`10^{-9}`), in the order technology, mode: ``Transport modes whose factors do not sum to 1: {tech} {mode}:
 {F:g}; {tech} {mode}: {F:g}. A flow of 1 MWh in such a mode carries that many MWh of resources.`` It also catches a resource
 name that the CSV reader dropped because it is not in the coordinate ``resource``, but only when the remaining factors of
-the mode no longer sum to 1.
+the mode no longer sum to 1. The CSV reader drops silently a resource, a mode or a technology label that is not listed in
+its coordinate: a mistyped mode label can therefore leave a technology with fewer modes, or plain, and W1 sees it only
+when the remaining factors of a defined mode no longer sum to 1.
 
 **Not refused:** factors whose sum is not 1 (W1 only); a mode defined for some technologies and not for others; two modes
 with the same factors; a modal technology with no existing pair (it builds no flow, and its net generation cells are
@@ -864,6 +866,12 @@ modal technology under its main resource only. The variable lives on the modal t
 technology is not modal, ``model.solution`` has ``transport_tech`` outer-joined for every transport variable, with the
 ``UserWarning`` "Coordinates across variables not equal" (``save_solution`` silences it). When every transport technology
 is modal there is no outer join and no warning.
+
+The order that fixes the sense of ``transport_mode_ramp_up`` and ``transport_mode_ramp_down`` is the order of the
+coordinate ``transport_mode`` in the input dataset, and ``save_solution`` keeps it (NetCDF and CSV rows). ``read_solution``
+returns every coordinate it reads from CSV in alphabetical order, ``transport_mode`` included, with the values right by
+label. The helper ``sort_coords_and_vars`` sorts ``transport_mode`` too: do not apply it to a dataset before building the
+model when the two ramps differ.
 
 Why we diverge from the official repository
 -------------------------------------------
@@ -1137,8 +1145,8 @@ use it, including the block load shedding and spillage and the block transport t
 reads ``module_hourly(s, "transport", "net_generation", p)``; a user who sets a transport length reads the powers with
 ``module_hourly(s, "transport", "power", p)``, the hourly variable ``operation_transport_power`` holding only the
 technologies without a length). The outer-join ``UserWarning`` of ``model.solution`` then also arises on
-``transport_tech``. In a block model ``get_net_generation`` does not list a technology that has no existing pair. The variable ``operation_transport_mode_power_in`` of the
-transport technologies with modes is hourly and written by ``save_solution``; ``get_net_generation`` lists a modal
+``transport_tech``. In a block model ``get_net_generation`` does not list a technology that has no existing pair. The
+variable ``operation_transport_mode_power_in`` of the transport technologies with modes is hourly and written by ``save_solution``; ``get_net_generation`` lists a modal
 technology under each resource it carries (see :ref:`section-transport-modes`). The
 dual of ``operation_transport_block_{L}h_power_max_constraint`` is one value per link,
 technology, block and year: it is the sum of the flat twin's hourly duals over the
