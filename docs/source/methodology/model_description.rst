@@ -722,7 +722,7 @@ What the mode ramp bounds
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The ramps bound the hourly change of the **difference** of the flows of two modes, in MW, by :math:`\rho^{sw} \,
-\mathrm{cap}`. They do not bound the share of a mode: a ramp on the share :math:`X_a / (X_a + X_b)` is a ratio of two
+\mathrm{cap}`. They do not bound the share of a mode: a ramp on the share :math:`X_{m} / (X_{m} + X_{m'})` is a ratio of two
 variables and is not linear, so it is not written. The ramp is a ramp on the split between two modes only while the
 total flow is constant. With :math:`\mathrm{cap} = 20` MW and :math:`\rho^{sw} = 0.5` (10 MW per hour), flows written
 as (blend, methane):
