@@ -810,8 +810,10 @@ it. The same holds for the energy delivered, as :math:`\eta` is common.
 Refusals and warning
 --------------------
 
-``check_inputs`` and ``build_model`` refuse (``ValueError``), in this order, after the refusals R1 to R10 of the time
-blocks and before R11 and R12, and only when the ``transport`` flag is on:
+``check_inputs`` and ``build_model`` refuse (``ValueError``), only when the ``transport`` flag is on. A dataset that
+breaks several rules gets one message. R18 and the refusal of a factor with another dimension can be raised while the
+time blocks are derived, before the others; apart from that the refusals are checked in this order, before R11 and
+R12 of the block technologies:
 
 - single resource: a transport technology that carries more than one resource of the model through
   ``transport_resource`` on its links: ``a transport tech must carry a single resource on all its links`` (this refusal
