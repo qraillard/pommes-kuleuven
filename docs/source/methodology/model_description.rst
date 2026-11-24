@@ -632,27 +632,46 @@ Inputs
 ------
 
 - The optional coordinate ``transport_mode`` (labels of the modes of all the technologies), declared in the study config
-  under ``coords`` like ``operating_condition``: ``values: ["blend", "methane"]``. **The order of the labels is the order
-  of the modes** (see below).
+  under ``coords`` like ``operating_condition``. **The order of the labels is the order of the modes** (see below).
 - ``transport_mode_factor[transport_tech, transport_mode, resource]`` (default 0, ``nan`` reads as 0, values
   :math:`\geq 0`): :math:`f_{\tau, m, r}`, MWh of resource :math:`r` that leave the "from" area per MWh of injected flow
   :math:`P^{in}` of technology :math:`\tau` in mode :math:`m`. The "to" area receives :math:`\eta` times that
   (``transport_efficiency``). A factor has no link, area, year or hour: the composition of a mode is the same on every
   link where the technology exists. A dimension may be missing from the factor (it is broadcast); another one is refused.
 - ``transport_mode_ramp_up[link, transport_tech, year_op]`` and ``transport_mode_ramp_down[link, transport_tech,
-  year_op]`` (default ``nan``, no constraint): :math:`\rho^{up}`, :math:`\rho^{down}`, the largest change per hour, as a
-  fraction of the capacity, of the difference between the flows of two modes. Read only for modal technologies.
+  year_op]`` (default ``nan``, no constraint): :math:`\rho^{sw, up}`, :math:`\rho^{sw, down}` (``sw``: switch), the
+  largest change per hour, as a fraction of the capacity, of the difference between the flows of two modes. Read only for
+  modal technologies.
 - ``transport_resource`` stays the *main* resource of a link: it decides where the (link, technology) pair exists and
   must have a positive factor in some mode (refusal R17).
 
+In the study config, the coordinate and the factor are declared as follows (the files are CSV files of the study; the
+ramps, when used, are declared in the same way, with ``fill: nan`` and ``index_input: [link, transport_tech, year_op]``):
+
+.. code-block:: yaml
+
+    coords:
+      transport_mode:
+        type: str
+        values: ["blend", "methane"]
+
+    input:
+      parameters:
+        transport_mode_factor:
+          file: transport_mode.csv
+          column: transport_mode_factor
+          type: float64
+          fill: 0.0
+          index_input: [transport_tech, transport_mode, resource]
+
 A mode :math:`m` is *defined* for :math:`\tau` when one of its factors is above 0, and :math:`\tau` is *modal*
-(:math:`\tau \in \mathcal{K}^{m}`) when it has a defined mode. One defined mode alone is allowed (a fixed blend). A mode
-may be defined for some technologies and not for others.
+(:math:`\tau \in \mathcal{W}^{mod} \subset \mathcal{W}^{tech}`) when it has a defined mode. One defined mode alone is
+allowed (a fixed blend). A mode may be defined for some technologies and not for others.
 
 Variable and constraints
 ------------------------
 
-For a modal technology :math:`\tau`, the variable :math:`\mathbf X_{l, \tau, m, t, y}`
+For a modal technology :math:`\tau`, the variable :math:`\mathbf X_{y, t, l, \tau, m}`
 (``operation_transport_mode_power_in``, MW of injected flow, :math:`\geq 0`) is the power injected at the "from" end of
 link :math:`l` in mode :math:`m`. It lives on the modal technologies only and on the existing pairs and defined modes.
 :math:`\mathbf{P}`, :math:`\mathbf{P}^{in}` and :math:`\mathbf{NG}` are ``operation_transport_power`` (withdrawn at the
@@ -664,8 +683,8 @@ The modes are tied to the total injected flow (``operation_transport_mode_power_
 .. math::
     :label: transport-mode-tie
 
-    \sum_{m} \mathbf X_{l, \tau, m, t, y} - \mathbf P^{in}_{l, \tau, t, y} = 0
-    \quad \forall \, l, \tau \in \mathcal{K}^{m}, t, y
+    \sum_{m} \mathbf X_{y, t, l, \tau, m} - \mathbf P^{in}_{y, t, l, \tau} = 0
+    \quad \forall \, y, t, l, \tau \in \mathcal{W}^{mod}
 
 The net generation of every resource that the technology carries (a resource is *carried* when one of its factors is above
 0) is defined from the modes (``operation_transport_mode_net_generation_def``). It replaces
@@ -674,24 +693,24 @@ The net generation of every resource that the technology carries (a resource is 
 .. math::
     :label: transport-mode-net-generation
 
-    \mathbf{NG}_{a, \tau, r, t, y} = \Delta t_t \sum_{m} f_{\tau, m, r}
-    \Big( \sum_{l : to(l) = a} \eta_{l, \tau, y} \, \mathbf X_{l, \tau, m, t, y}
-        - \sum_{l : from(l) = a} \mathbf X_{l, \tau, m, t, y} \Big)
-    \quad \forall \, a, \tau \in \mathcal{K}^{m}, r, t, y
+    \mathbf{NG}_{y, t, a, \tau, r} = \Delta t_t \sum_{m} f_{\tau, m, r}
+    \Big( \sum_{l : to(l) = a} \eta_{y, l, \tau} \, \mathbf X_{y, t, l, \tau, m}
+        - \sum_{l : from(l) = a} \mathbf X_{y, t, l, \tau, m} \Big)
+    \quad \forall \, y, t, a, \tau \in \mathcal{W}^{mod}, r
 
-For each pair of modes :math:`(a, b)`, the first one before the second one in the coordinate, both defined for
-:math:`\tau`, with :math:`d_{t} = \mathbf X_{a, t} - \mathbf X_{b, t}` and on the hours other than the first (the ramp is
-not cyclic), where the ramp is finite:
+For each pair of modes :math:`(m, m')`, the first one before the second one in the coordinate, both defined for
+:math:`\tau`, with :math:`d_{y, t, l, \tau} = \mathbf X_{y, t, l, \tau, m} - \mathbf X_{y, t, l, \tau, m'}` and on the hours
+other than the first (the ramp is not cyclic), where the ramp is finite:
 
 .. math::
     :label: transport-mode-ramp-up
 
-    \frac{d_{t} - d_{t-1}}{\Delta t_t} \leq \rho^{up}_{l, \tau, y} \, \mathrm{cap}_{l, \tau, y}
+    \frac{d_{y, t} - d_{y, t-1}}{\Delta t_t} \leq \rho^{sw, up}_{y, l, \tau} \, \mathrm{cap}_{y, l, \tau}
 
 .. math::
     :label: transport-mode-ramp-down
 
-    \frac{d_{t-1} - d_{t}}{\Delta t_t} \leq \rho^{down}_{l, \tau, y} \, \mathrm{cap}_{l, \tau, y}
+    \frac{d_{y, t-1} - d_{y, t}}{\Delta t_t} \leq \rho^{sw, down}_{y, l, \tau} \, \mathrm{cap}_{y, l, \tau}
 
 The names of the two ramps are ``operation_transport_mode_ramp_up_constraint_{i}_{j}`` and
 ``operation_transport_mode_ramp_down_constraint_{i}_{j}``, where :math:`i < j` are the **zero-based positions** of the
@@ -702,10 +721,11 @@ fractions per hour of the *injected* flow; at :math:`\eta = 1` this is the withd
 What the mode ramp bounds
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The ramps bound the hourly change of the **difference** of the flows of two modes, in MW, by :math:`\rho \, \mathrm{cap}`.
-They do not bound the share of a mode: a ramp on the share :math:`X_a / (X_a + X_b)` is a ratio of two variables and is
-not linear, so it is not written. The ramp is a ramp on the split between two modes only while the total flow is constant.
-With :math:`\mathrm{cap} = 20` MW and :math:`\rho = 0.5` (10 MW per hour), flows written as (blend, methane):
+The ramps bound the hourly change of the **difference** of the flows of two modes, in MW, by :math:`\rho^{sw} \,
+\mathrm{cap}`. They do not bound the share of a mode: a ramp on the share :math:`X_a / (X_a + X_b)` is a ratio of two
+variables and is not linear, so it is not written. The ramp is a ramp on the split between two modes only while the
+total flow is constant. With :math:`\mathrm{cap} = 20` MW and :math:`\rho^{sw} = 0.5` (10 MW per hour), flows written
+as (blend, methane):
 
 .. list-table::
     :header-rows: 1
@@ -728,7 +748,7 @@ With :math:`\mathrm{cap} = 20` MW and :math:`\rho = 0.5` (10 MW per hour), flows
       - no
 
 Two consequences. A complete switch at a constant flow :math:`Q` changes the difference by :math:`2 Q`: on a full pipe,
-:math:`\rho = 2`, not 1, leaves the switch free within the hour. And the mode ramp also slows a pipe that starts or stops
+:math:`\rho^{sw} = 2`, not 1, leaves the switch free within the hour. And the mode ramp also slows a pipe that starts or stops
 in a single mode.
 
 The order of the modes is yours
@@ -790,8 +810,8 @@ it. The same holds for the energy delivered, as :math:`\eta` is common.
 Refusals and warning
 --------------------
 
-``check_inputs`` and ``build_model`` refuse (``ValueError``), in this order after the time-block refusals, and only when
-the ``transport`` flag is on:
+``check_inputs`` and ``build_model`` refuse (``ValueError``), in this order, after the refusals R1 to R10 of the time
+blocks and before R11 and R12, and only when the ``transport`` flag is on:
 
 - single resource: a transport technology that carries more than one resource of the model through
   ``transport_resource`` on its links: ``a transport tech must carry a single resource on all its links`` (this refusal
@@ -815,7 +835,8 @@ R13, R14 and R17 name the first offending link. A modal technology is read after
 **W1, a warning.** One ``UserWarning`` lists every defined mode of a modal technology whose factors do not sum to 1
 (tolerance :math:`10^{-9}`), in the order technology, mode: ``Transport modes whose factors do not sum to 1: {tech} {mode}:
 {F:g}; {tech} {mode}: {F:g}. A flow of 1 MWh in such a mode carries that many MWh of resources.`` It also catches a resource
-name that the CSV reader dropped because it is not in the coordinate ``resource``.
+name that the CSV reader dropped because it is not in the coordinate ``resource``, but only when the remaining factors of
+the mode no longer sum to 1.
 
 **Not refused:** factors whose sum is not 1 (W1 only); a mode defined for some technologies and not for others; two modes
 with the same factors; a modal technology with no existing pair (it builds no flow, and its net generation cells are
@@ -839,9 +860,10 @@ Outputs
 The variable ``operation_transport_mode_power_in`` is in the solution and written by ``save_solution`` (CSV with a
 ``transport_mode`` column, NetCDF): a user who wants the mode of each flow reads it by name. There is no new summary.
 ``get_net_generation`` lists a modal technology under each resource it carries. The plot of the costs by resource lists a
-modal technology under its main resource only. For a modal dataset ``model.solution`` has ``transport_tech`` outer-joined
-for every transport variable, with the ``UserWarning`` "Coordinates across variables not equal" (``save_solution`` silences
-it).
+modal technology under its main resource only. The variable lives on the modal technologies only: when some transport
+technology is not modal, ``model.solution`` has ``transport_tech`` outer-joined for every transport variable, with the
+``UserWarning`` "Coordinates across variables not equal" (``save_solution`` silences it). When every transport technology
+is modal there is no outer join and no warning.
 
 Why we diverge from the official repository
 -------------------------------------------

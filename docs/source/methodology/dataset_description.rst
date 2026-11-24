@@ -39,16 +39,35 @@ Power variables (including load shedding and spillage) are multiplied by :math:`
 
 Without these five parameters the model is exactly that of 0.7.1+kul. See the time blocks section of the model description.
 
-**Transport technologies with modes.** The optional coordinate ``transport_mode`` and three parameters let one transport
-technology carry several resources through modes (blended hydrogen). ``transport_mode_factor`` (``transport_tech``,
-``transport_mode``, ``resource``; default 0, ``nan`` reads as 0, values >= 0) is the MWh of each resource that leave the
-"from" area per MWh of injected flow in a mode; a technology with a mode whose factor is above 0 is *modal*, and its
-modes share one capacity. ``transport_mode_ramp_up`` and ``transport_mode_ramp_down`` (``link``, ``transport_tech``,
-``year_op``; default ``nan``, no constraint) bound the hourly change, as a fraction of the capacity, of the difference of the
-flows of two modes, in the order of the coordinate. The coordinate is declared in the config under ``coords``
-(``transport_mode: {values: ["blend", "methane"]}``) and the factor is read from a CSV such as ``transport_mode.csv`` with
-the header ``transport_tech;transport_mode;resource;transport_mode_factor``. Without a modal technology the model is
-exactly that of 0.8.0+kul. See the section "Transport technologies with modes" of the model description.
+**Transport technologies with modes.** The optional coordinate ``transport_mode`` and three parameters let one
+transport technology carry several resources through modes (blended hydrogen). ``transport_mode_factor``
+(``transport_tech``, ``transport_mode``, ``resource``; default 0, ``nan`` reads as 0, values >= 0) is the MWh of each
+resource that leave the "from" area per MWh of injected flow in a mode; a technology with a mode whose factor is above
+0 is *modal*, and its modes share one capacity. ``transport_mode_ramp_up`` and ``transport_mode_ramp_down`` (``link``,
+``transport_tech``, ``year_op``; default ``nan``, no constraint) bound the hourly change, as a fraction of the
+capacity, of the difference of the flows of two modes, in the order of the coordinate. The coordinate is declared in
+the config under ``coords`` and the factor is read from a CSV such as ``transport_mode.csv`` with the header
+``transport_tech;transport_mode;resource;transport_mode_factor``:
+
+.. code-block:: yaml
+
+    coords:
+      transport_mode:
+        type: str
+        values: ["blend", "methane"]
+
+    input:
+      parameters:
+        transport_mode_factor:
+          file: transport_mode.csv
+          column: transport_mode_factor
+          type: float64
+          fill: 0.0
+          index_input: [transport_tech, transport_mode, resource]
+
+The ramps are declared in the same way (``fill: nan``, ``index_input: [link, transport_tech, year_op]``). Without a modal
+technology the model is exactly that of 0.8.0+kul. See the section "Transport technologies with modes" of the model
+description.
 
 .. list-table::
     :header-rows: 1

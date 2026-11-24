@@ -58,6 +58,10 @@ Indices and Index Sets
       - ``transport_tech``
       - Transport technologies in area :math:`a` for year :math:`i`
 
+    * - :math:`\mathcal{W}^{mod} \subset \mathcal{W}^{tech}`
+      - ``transport_tech``
+      - Modal transport technologies: those with a defined mode, that is one ``transport_mode_factor`` above 0 (empty without the coordinate ``transport_mode``)
+
     * - :math:`e \in \mathcal{E}^{tech}_{a, i}`
       - ``net_import_tech``
       - Import/export technologies in area :math:`a` for year :math:`i`
@@ -335,11 +339,11 @@ Transport Parameters
       - ``transport_mode_factor``
       - MWh of resource :math:`r` that leave the "from" area per MWh of injected flow of :math:`\tau` in mode :math:`m` (default 0, ``nan`` reads as 0, values :math:`\geq 0`); the "to" area receives :math:`\eta` times that. A mode is defined when one of its factors is above 0, a technology is modal when it has a defined mode
 
-    * - :math:`\rho^{up, m}_{y, l, \tau}`
+    * - :math:`\rho^{sw, up}_{y, l, \tau}`
       - ``transport_mode_ramp_up``
       - Largest rise per hour, as a fraction of the capacity, of the difference between the flows of two modes (the first minus the second in the order of ``transport_mode``) [-]. ``nan``: no constraint
 
-    * - :math:`\rho^{down, m}_{y, l, \tau}`
+    * - :math:`\rho^{sw, down}_{y, l, \tau}`
       - ``transport_mode_ramp_down``
       - Largest fall per hour of the same difference [-]. ``nan``: no constraint. Give it the value of ``transport_mode_ramp_up`` when no asymmetry is wanted
 
